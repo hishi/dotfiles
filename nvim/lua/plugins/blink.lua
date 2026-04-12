@@ -31,6 +31,10 @@ return {
     -- elsewhere in your config, without redefining it, due to `opts_extend`
     sources = {
       default = { "lsp", "path", "snippets", "buffer" },
+      per_filetype = {
+        codecompanion = { "codecompanion" },
+        codecompanion_input = { "codecompanion" },
+      },
     },
 
     -- (Default) Rust fuzzy matcher for typo resistance and significantly better performance
@@ -40,5 +44,5 @@ return {
     -- See the fuzzy documentation for more information
     fuzzy = { implementation = "prefer_rust_with_warning" },
   },
-  opts_extend = { "sources.default" },
+  opts_extend = { "sources.default", "sources.per_filetype" },
 }

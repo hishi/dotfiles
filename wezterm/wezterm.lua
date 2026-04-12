@@ -82,10 +82,11 @@ end)
 wezterm.on("gui-startup", function(cmd)
   local tab, pane, window = mux.spawn_window {
     workspace = 'default',
-    cwd = wezterm.home_dir .. '/Dev',
+    cwd = wezterm.home_dir .. '/Dev/dotfiles/wezterm',
   }
 
   local tab_dirs = {
+    '/Dev/dotfiles/nvim',
     '/Dev/python',
     '/Dev/nextjs',
   }

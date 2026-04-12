@@ -22,6 +22,8 @@ require("lazy").setup({
     { import = "plugins.snacks" },
     { import = "plugins.persistence" },
     { import = "plugins.copilot" },
+    { import = "plugins.codecompanion" },
+    { import = "plugins.render-markdown" },
     { import = "plugins.avante" },
     { import = "plugins.oil" },
     { import = "plugins.oil-git-status" },
