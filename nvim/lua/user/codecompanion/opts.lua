@@ -1,6 +1,7 @@
 local chat_keymaps = require("user.codecompanion.chat.keymaps")
 local history_opts = require("user.codecompanion.history_opts")
 local responses_patch = require("user.codecompanion.patches.copilot_responses_parse_chat")
+local system_prompt = require("user.codecompanion.system_prompt")
 
 return {
   language = "Japanese",
@@ -43,14 +44,7 @@ return {
     chat = {
       adapter = "copilot",
       opts = {
-        system_prompt = function(ctx)
-          return ctx.default_system_prompt
-            .. "\n\n"
-            .. "重要: 非コードの回答は必ず自然な日本語で行ってください。"
-            .. " 英語で返さず、見出し・本文・箇条書き・補足もすべて日本語にしてください。"
-            .. "\n\n"
-            .. "重要: ファイル変更が必要なら、可能な限りツールを使って実際にファイルを更新してください。"
-        end,
+        system_prompt = system_prompt.chat,
       },
       roles = {
         llm = function(adapter)
@@ -71,7 +65,10 @@ return {
         },
         create_file = { opts = { require_approval_before = false } },
         read_file = { opts = { require_approval_before = false } },
-        file_search = { opts = { require_approval_before = false } },
+        file_search = {
+          path = "user.codecompanion.tools.file_search",
+          opts = { require_approval_before = false },
+        },
         insert_edit_into_file = { opts = { require_confirmation_after = false } },
         grep_search = { path = "user.codecompanion.tools.grep_search", opts = { require_approval_before = false } },
         run_command = {

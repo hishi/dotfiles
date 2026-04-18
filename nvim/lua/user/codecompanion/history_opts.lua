@@ -18,15 +18,26 @@ end
 
 function M.opts()
   return {
+    picker = "snacks",
     auto_save = true,
+    expiration_days = 30,
     continue_last_chat = false,
     auto_generate_title = true,
     title_generation_opts = {
       format_title = M.format_title_datetime_prefix,
+    },
+    summary = {
+      create_summary_keymap = "gcs",
+      browse_summaries_keymap = "gbs",
+      generation_opts = {
+        adapter = "copilot",
+        model = "gpt-5-mini",
+        include_references = true,
+        include_tool_outputs = true,
+      },
     },
     dir_to_save = vim.fn.stdpath("data") .. "/codecompanion-history",
   }
 end
 
 return M
-
