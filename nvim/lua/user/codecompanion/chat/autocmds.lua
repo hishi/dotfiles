@@ -3,6 +3,9 @@ local M = {}
 function M.setup()
   local aug = vim.api.nvim_create_augroup("user.codecompanion", { clear = true })
 
+  require("user.codecompanion.highlights").setup()
+  require("user.codecompanion.pending_edits").setup()
+
   vim.api.nvim_create_autocmd("User", {
     pattern = "CodeCompanionChatCreated",
     group = aug,

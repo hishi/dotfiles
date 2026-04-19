@@ -12,6 +12,12 @@ function M.setup()
   end, { desc = "Show Copilot usage/quota statistics" })
 
   vim.keymap.set("n", "<leader>ccs", "<cmd>CodeCompanionCopilotStats<cr>", { desc = "Copilot Stats" })
+
+  vim.api.nvim_create_user_command("CodeCompanionPendingTimeline", function()
+    require("user.codecompanion.pending_timeline").open()
+  end, { desc = "Show pending edit timeline for current file" })
+
+  vim.keymap.set("n", "<leader>cct", "<cmd>CodeCompanionPendingTimeline<cr>", { desc = "Pending Timeline" })
 end
 
 return M

@@ -69,7 +69,10 @@ return {
           path = "user.codecompanion.tools.file_search",
           opts = { require_approval_before = false },
         },
-        insert_edit_into_file = { opts = { require_confirmation_after = false } },
+        insert_edit_into_file = {
+          path = "user.codecompanion.tools.insert_edit_into_file",
+          opts = { require_confirmation_after = false },
+        },
         grep_search = { path = "user.codecompanion.tools.grep_search", opts = { require_approval_before = false } },
         run_command = {
           path = "interactions.chat.tools.builtin.run_command",
