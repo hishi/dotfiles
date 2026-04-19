@@ -47,6 +47,32 @@ function M.accept_all(filepath)
 end
 
 ---@param filepath string
+---@param idx integer 1-based pending index to accept
+function M.accept_one(filepath, idx)
+  if type(filepath) ~= "string" or filepath == "" then
+    return false, "No filepath"
+  end
+  idx = tonumber(idx)
+  if not idx then
+    return false, "Invalid index"
+  end
+
+  local pe = require("user.codecompanion.pending_edits")
+  local removed = pe.remove_at(filepath, idx)
+  if not removed then
+    return false, "Index out of range"
+  end
+
+  local tool = require("user.codecompanion.tools.insert_edit_into_file")
+  each_loaded_buf_for_path(filepath, function(b)
+    pcall(tool.clear_inline_visual, b)
+    pcall(pe.try_restore_for_buf, b)
+  end)
+
+  return true, nil
+end
+
+---@param filepath string
 ---@param idx integer 1-based pending index to reject to (reject this and newer)
 function M.reject_to(filepath, idx)
   if type(filepath) ~= "string" or filepath == "" then
@@ -99,5 +125,33 @@ function M.reject_to(filepath, idx)
   return true, nil
 end
 
-return M
+---@param filepath string
+---@param idx integer 1-based pending index to reject
+function M.reject_one(filepath, idx)
+  if type(filepath) ~= "string" or filepath == "" then
+    return false, "No filepath"
+  end
+  idx = tonumber(idx)
+  if not idx then
+    return false, "Invalid index"
+  end
 
+  local pe = require("user.codecompanion.pending_edits")
+  local state = pe.get(filepath)
+  local ents = state and state.entries or {}
+  if #ents == 0 then
+    return false, "No pending"
+  end
+  if idx < 1 or idx > #ents then
+    return false, "Index out of range"
+  end
+
+  -- Keep reject behavior predictable: only the latest pending can be rejected in place.
+  if idx ~= #ents then
+    return false, "Reject older pending is not supported; reject newer pending first"
+  end
+
+  return M.reject_to(filepath, idx)
+end
+
+return M

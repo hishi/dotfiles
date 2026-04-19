@@ -116,6 +116,65 @@ local function split_lines(s)
   return vim.split(s, "\n", { plain = true })
 end
 
+local function join_lines(lines)
+  return table.concat(lines or {}, "\n")
+end
+
+local function has_trailing_newline(text)
+  return type(text) == "string" and text:sub(-1) == "\n"
+end
+
+local function ensure_trailing_newline(text, keep_newline)
+  text = text or ""
+  if keep_newline and text ~= "" and not has_trailing_newline(text) then
+    return text .. "\n"
+  end
+  return text
+end
+
+local function replace_line_range(lines, start_1, count, replacement)
+  lines = lines or {}
+  replacement = replacement or {}
+  start_1 = math.max(1, tonumber(start_1) or 1)
+  count = math.max(0, tonumber(count) or 0)
+
+  local out = {}
+  local head_end = math.min(#lines, start_1 - 1)
+  for i = 1, head_end do
+    out[#out + 1] = lines[i]
+  end
+  for i = 1, #replacement do
+    out[#out + 1] = replacement[i]
+  end
+  local tail_start = math.min(#lines + 1, start_1 + count)
+  for i = tail_start, #lines do
+    out[#out + 1] = lines[i]
+  end
+  return out
+end
+
+local function pick_hunk_at_cursor(hunks, row0)
+  if type(hunks) ~= "table" or #hunks == 0 then
+    return nil
+  end
+  local nearest = nil
+  local nearest_dist = math.huge
+  for _, h in ipairs(hunks) do
+    local b_start, b_count = h[3], h[4]
+    local start0 = math.max(0, (b_start or 1) - 1)
+    local end0 = (b_count or 0) > 0 and (start0 + b_count - 1) or start0
+    if row0 >= start0 and row0 <= end0 then
+      return h
+    end
+    local dist = row0 < start0 and (start0 - row0) or (row0 - end0)
+    if dist < nearest_dist then
+      nearest_dist = dist
+      nearest = h
+    end
+  end
+  return nearest
+end
+
 local function set_buffer_content(bufnr, content)
   if not bufnr or not api.nvim_buf_is_valid(bufnr) then
     return
@@ -130,6 +189,11 @@ local function clear_inline_visual(bufnr)
     return
   end
 
+  local map_group = vim.b[bufnr].__user_codecompanion_inline_diff_map_group
+  if map_group then
+    pcall(api.nvim_del_augroup_by_id, map_group)
+  end
+
   pcall(api.nvim_buf_clear_namespace, bufnr, NS, 0, -1)
 
   pcall(vim.keymap.del, "n", "ga", { buffer = bufnr })
@@ -140,6 +204,7 @@ local function clear_inline_visual(bufnr)
   pcall(function()
     vim.b[bufnr].__user_codecompanion_inline_diff = nil
     vim.b[bufnr].__user_codecompanion_inline_diff_state = nil
+    vim.b[bufnr].__user_codecompanion_inline_diff_map_group = nil
   end)
 end
 
@@ -149,12 +214,21 @@ local function accept_inline(bufnr)
   end
   local st = vim.b[bufnr].__user_codecompanion_inline_diff_state
   local filepath = st and st.filepath or api.nvim_buf_get_name(bufnr)
+  local remaining = 0
   if filepath and filepath ~= "" then
     pcall(function()
-      require("user.codecompanion.pending_edits").remove_all(filepath)
+      local pe = require("user.codecompanion.pending_edits")
+      pe.pop(filepath)
+      local state = pe.get(filepath)
+      remaining = state and state.entries and #state.entries or 0
     end)
   end
   clear_inline_visual(bufnr)
+  if filepath and filepath ~= "" and remaining > 0 then
+    pcall(function()
+      require("user.codecompanion.pending_edits").try_restore_for_buf(bufnr)
+    end)
+  end
 end
 
 local function reject_inline(bufnr, restore_fn)
@@ -188,10 +262,14 @@ local function reject_inline(bufnr, restore_fn)
   return true, nil
 end
 
+-- Apply an "inline diff" overlay in the edited buffer.
+-- Note: `original_content` is the baseline used for highlighting (may be the oldest pending original),
+-- while persistence can store a per-proposal `{ original, proposed }` via `meta.persist_*`.
 local function apply_inline_diff(bufnr, original_content, new_content, restore_fn, show_diff_fn, persist, meta)
   if not bufnr or not api.nvim_buf_is_valid(bufnr) then
     return
   end
+  meta = meta or {}
 
   clear_inline_visual(bufnr)
   ensure_proposed_hl()
@@ -245,13 +323,21 @@ local function apply_inline_diff(bufnr, original_content, new_content, restore_f
     })
   end
 
-  local first_change_row0 = nil
+  local banner_rows = {}
+  local banner_seen = {}
+  local function queue_help_banner(row0)
+    row0 = clamp_row_0(row0)
+    if banner_seen[row0] then
+      return
+    end
+    banner_seen[row0] = true
+    table.insert(banner_rows, row0)
+  end
+
   for _, h in ipairs(hunks) do
     local a_start, a_count, b_start, b_count = h[1], h[2], h[3], h[4]
-    local candidate_row0 = clamp_row_0((b_start - 1))
-    if first_change_row0 == nil or candidate_row0 < first_change_row0 then
-      first_change_row0 = candidate_row0
-    end
+    local banner_row = (b_count > 0) and (b_start - 1) or (b_start - 2)
+    queue_help_banner(banner_row)
 
     if b_count > 0 then
       local hl = (a_count == 0) and PROPOSED_ADD_HL or PROPOSED_CHANGE_HL
@@ -304,25 +390,33 @@ local function apply_inline_diff(bufnr, original_content, new_content, restore_f
         local anchor_row0 = clamp_row_0((b_start - 1) + paired)
         api.nvim_buf_set_extmark(bufnr, NS, anchor_row0, 0, {
           virt_lines = deleted,
-          virt_lines_above = true,
+          virt_lines_above = false,
           priority = 110,
         })
       end
     end
   end
 
-  if first_change_row0 ~= nil then
-    set_help_banner_at(first_change_row0)
-  else
+  if #banner_rows == 0 then
     set_help_banner_at(0)
+  else
+    table.sort(banner_rows)
+    for _, row0 in ipairs(banner_rows) do
+      set_help_banner_at(row0)
+    end
   end
 
   vim.b[bufnr].__user_codecompanion_inline_diff = true
-  meta = meta or {}
+  local persist_original = meta.persist_original or original_content
+  local persist_proposed = meta.persist_proposed or new_content
   vim.b[bufnr].__user_codecompanion_inline_diff_state = {
     filepath = api.nvim_buf_get_name(bufnr),
+    -- UI baseline (for highlight + diff view)
     original = original_content,
     proposed = new_content,
+    -- Persisted per-proposal snapshot (used by pending timeline + restore walking)
+    persist_original = persist_original,
+    persist_proposed = persist_proposed,
     ft = meta.ft or vim.bo[bufnr].filetype,
     title = meta.title or vim.fn.fnamemodify(api.nvim_buf_get_name(bufnr), ":."),
     explanation = meta.explanation,
@@ -331,11 +425,20 @@ local function apply_inline_diff(bufnr, original_content, new_content, restore_f
   if persist ~= false then
     pcall(function()
       local pe = require("user.codecompanion.pending_edits")
-      local id = pe.push(vim.b[bufnr].__user_codecompanion_inline_diff_state)
+      local st = vim.b[bufnr].__user_codecompanion_inline_diff_state
+      local id = pe.push({
+        filepath = st.filepath,
+        original = st.persist_original,
+        proposed = st.persist_proposed,
+        ft = st.ft,
+        title = st.title,
+        explanation = st.explanation,
+        saved_at = st.saved_at,
+      })
       vim.b[bufnr].__user_codecompanion_inline_diff_state.id = id
       local filepath = vim.b[bufnr].__user_codecompanion_inline_diff_state.filepath
-      local st = filepath and pe.get(filepath) or nil
-      local count = st and st.entries and #st.entries or 0
+      local persisted = filepath and pe.get(filepath) or nil
+      local count = persisted and persisted.entries and #persisted.entries or 0
       if count > 1 then
         vim.notify(
           ("CodeCompanion: %d pending choices for this file (use gr repeatedly to walk back)"):format(count),
@@ -345,29 +448,190 @@ local function apply_inline_diff(bufnr, original_content, new_content, restore_f
     end)
   end
 
-  vim.keymap.set("n", "ga", function()
-    accept_inline(bufnr)
-    vim.notify("CodeCompanion: changes accepted", vim.log.levels.INFO)
-  end, { buffer = bufnr, desc = "CodeCompanion: Accept changes" })
-
-  vim.keymap.set("n", "gr", function()
-    local ok, err = reject_inline(bufnr, restore_fn)
-    if ok then
-      vim.notify("CodeCompanion: changes rejected (reverted)", vim.log.levels.WARN)
-    else
-      vim.notify("CodeCompanion: reject failed: " .. (err or "unknown"), vim.log.levels.ERROR)
+  local function persist_single_pending(base_text, proposed_text, state)
+    if not state or not state.filepath or state.filepath == "" then
+      return
     end
-  end, { buffer = bufnr, desc = "CodeCompanion: Reject changes" })
-
-  if type(show_diff_fn) == "function" then
-    vim.keymap.set("n", "gv", function()
-      show_diff_fn()
-    end, { buffer = bufnr, desc = "CodeCompanion: View diff" })
+    pcall(function()
+      local pe = require("user.codecompanion.pending_edits")
+      pe.remove_all(state.filepath)
+      if base_text ~= proposed_text then
+        pe.push({
+          filepath = state.filepath,
+          original = base_text,
+          proposed = proposed_text,
+          ft = state.ft,
+          title = state.title,
+          explanation = state.explanation,
+          saved_at = os.time(),
+        })
+      end
+    end)
   end
 
-  vim.keymap.set("n", "gH", function()
-    require("user.codecompanion.pending_timeline").open({ bufnr = bufnr })
-  end, { buffer = bufnr, desc = "CodeCompanion: Pending timeline" })
+  local function refresh_inline_state(base_text, proposed_text, state)
+    if base_text == proposed_text then
+      if state and state.filepath and state.filepath ~= "" then
+        pcall(function()
+          require("user.codecompanion.pending_edits").remove_all(state.filepath)
+        end)
+      end
+      clear_inline_visual(bufnr)
+      vim.notify("CodeCompanion: all proposals resolved", vim.log.levels.INFO)
+      return
+    end
+
+    local function restore_all()
+      if not state or not state.filepath or state.filepath == "" then
+        return false, "No filepath"
+      end
+      local ok_write, err_write = pcall(function()
+        Path:new(state.filepath):write(base_text, "w")
+      end)
+      if not ok_write then
+        return false, err_write
+      end
+      if api.nvim_buf_is_valid(bufnr) then
+        set_buffer_content(bufnr, base_text)
+      end
+      return true, nil
+    end
+
+    local function show_diff_fn_current()
+      if config.display.diff.enabled ~= true then
+        return
+      end
+      show_diff({
+        chat_bufnr = nil,
+        target_bufnr = bufnr,
+        ft = state and state.ft or vim.bo[bufnr].filetype,
+        from_lines = split_lines(base_text),
+        to_lines = split_lines(proposed_text),
+        title = state and state.title or vim.fn.fnamemodify(api.nvim_buf_get_name(bufnr), ":."),
+        restore = restore_all,
+      })
+    end
+
+    persist_single_pending(base_text, proposed_text, state)
+    apply_inline_diff(bufnr, base_text, proposed_text, restore_all, show_diff_fn_current, false, {
+      ft = state and state.ft or vim.bo[bufnr].filetype,
+      title = state and state.title or vim.fn.fnamemodify(api.nvim_buf_get_name(bufnr), ":."),
+      explanation = state and state.explanation or nil,
+      persist_original = base_text,
+      persist_proposed = proposed_text,
+    })
+  end
+
+  local function resolve_hunk(action)
+    local state = vim.b[bufnr].__user_codecompanion_inline_diff_state
+    if not state then
+      return vim.notify("CodeCompanion: no active inline proposal", vim.log.levels.WARN)
+    end
+
+    local base_text = state.original or original_content
+    local current_text = join_lines(api.nvim_buf_get_lines(bufnr, 0, -1, false))
+    current_text = ensure_trailing_newline(current_text, has_trailing_newline(state.proposed or ""))
+    local hunks_now = vim.diff(base_text, current_text, { result_type = "indices" }) or {}
+    if #hunks_now == 0 then
+      return refresh_inline_state(base_text, current_text, state)
+    end
+
+    local row0 = api.nvim_win_get_cursor(0)[1] - 1
+    local h = pick_hunk_at_cursor(hunks_now, row0)
+    if not h then
+      return vim.notify("CodeCompanion: no proposal found at cursor", vim.log.levels.WARN)
+    end
+
+    local a_start, a_count, b_start, b_count = h[1], h[2], h[3], h[4]
+    local base_lines = split_lines(base_text)
+    local current_lines = split_lines(current_text)
+
+    if action == "accept" then
+      local accepted_lines = {}
+      for i = b_start, (b_start + b_count - 1) do
+        accepted_lines[#accepted_lines + 1] = current_lines[i] or ""
+      end
+      local new_base_lines = replace_line_range(base_lines, a_start, a_count, accepted_lines)
+      local new_base_text = join_lines(new_base_lines)
+      new_base_text = ensure_trailing_newline(new_base_text, has_trailing_newline(base_text))
+      refresh_inline_state(new_base_text, current_text, state)
+      vim.notify("CodeCompanion: accepted proposal at cursor", vim.log.levels.INFO)
+      return
+    end
+
+    if action == "reject" then
+      local original_lines = {}
+      for i = a_start, (a_start + a_count - 1) do
+        original_lines[#original_lines + 1] = base_lines[i] or ""
+      end
+      local new_current_lines = replace_line_range(current_lines, b_start, b_count, original_lines)
+      local new_current_text = join_lines(new_current_lines)
+      new_current_text = ensure_trailing_newline(new_current_text, has_trailing_newline(current_text))
+
+      if state.filepath and state.filepath ~= "" then
+        local ok_write, err_write = pcall(function()
+          Path:new(state.filepath):write(new_current_text, "w")
+        end)
+        if not ok_write then
+          return vim.notify("CodeCompanion: reject failed: " .. tostring(err_write), vim.log.levels.ERROR)
+        end
+      end
+
+      if api.nvim_buf_is_valid(bufnr) then
+        set_buffer_content(bufnr, new_current_text)
+      end
+      refresh_inline_state(base_text, new_current_text, state)
+      vim.notify("CodeCompanion: rejected proposal at cursor", vim.log.levels.WARN)
+      return
+    end
+  end
+
+  local function set_inline_keymaps()
+    vim.keymap.set("n", "ga", function()
+      resolve_hunk("accept")
+    end, { buffer = bufnr, desc = "CodeCompanion: Accept changes", nowait = true, silent = true })
+
+    vim.keymap.set("n", "gr", function()
+      resolve_hunk("reject")
+    end, { buffer = bufnr, desc = "CodeCompanion: Reject changes", nowait = true, silent = true })
+
+    -- Backward-compatible fallback in case `gr` is shadowed by another plugin mapping.
+    vim.keymap.set("n", "g3", function()
+      resolve_hunk("reject")
+    end, { buffer = bufnr, desc = "CodeCompanion: Reject changes", nowait = true, silent = true })
+
+    if type(show_diff_fn) == "function" then
+      vim.keymap.set("n", "gv", function()
+        show_diff_fn()
+      end, { buffer = bufnr, desc = "CodeCompanion: View diff", nowait = true, silent = true })
+    end
+
+    vim.keymap.set("n", "gH", function()
+      require("user.codecompanion.pending_timeline").open({ bufnr = bufnr, layout = "float" })
+    end, { buffer = bufnr, desc = "CodeCompanion: Pending timeline", nowait = true, silent = true })
+  end
+
+  set_inline_keymaps()
+
+  pcall(function()
+    local old_group = vim.b[bufnr].__user_codecompanion_inline_diff_map_group
+    if old_group then
+      api.nvim_del_augroup_by_id(old_group)
+    end
+    local group = api.nvim_create_augroup(("user.codecompanion.inline_maps.%d"):format(bufnr), { clear = true })
+    vim.b[bufnr].__user_codecompanion_inline_diff_map_group = group
+    api.nvim_create_autocmd({ "BufEnter", "LspAttach" }, {
+      group = group,
+      buffer = bufnr,
+      callback = function()
+        vim.schedule(function()
+          if api.nvim_buf_is_valid(bufnr) and vim.b[bufnr].__user_codecompanion_inline_diff then
+            set_inline_keymaps()
+          end
+        end)
+      end,
+    })
+  end)
 
   vim.notify("CodeCompanion: inline diff active (ga=accept, gr=reject, gv=view)", vim.log.levels.INFO)
 end
@@ -569,7 +833,7 @@ return {
   ---@param bufnr number
   ---@param original string
   ---@param proposed string
-  ---@param meta? { filepath?: string, title?: string, ft?: string }
+  ---@param meta? { filepath?: string, title?: string, ft?: string, reject_to?: string }
   rehydrate_inline_diff = function(bufnr, original, proposed, meta)
     if not bufnr or not api.nvim_buf_is_valid(bufnr) then
       return
@@ -585,12 +849,15 @@ return {
       if filepath == "" then
         return false, "No filepath"
       end
-      local ok2, err2 = io_mod.write_file(filepath, original, applied_info)
+      -- For restored inline diffs, `original` may be the baseline used for highlighting.
+      -- When rejecting the latest pending proposal, restore to that proposal's `original`.
+      local reject_to = (meta and meta.reject_to) or original
+      local ok2, err2 = io_mod.write_file(filepath, reject_to, applied_info)
       if not ok2 then
         return false, err2
       end
       if api.nvim_buf_is_valid(bufnr) then
-        set_buffer_content(bufnr, original)
+        set_buffer_content(bufnr, reject_to)
       end
       return true, nil
     end
@@ -728,7 +995,7 @@ return {
     diff = build_proposed_first_merged(diff)
 
     local diff_ui = diff_ui_mod.show(diff, {
-      banner = " [Pending]  ga Accept all | gr Reject to here | ]c/[c Next/Prev hunks | q Close ",
+      banner = " [Pending]  ga Accept this pending | gr Reject this pending | ]c/[c Next/Prev hunks | q Close ",
       diff_id = math.random(10000000),
       inline = false,
       skip_default_keymaps = true,
@@ -738,25 +1005,25 @@ return {
 
     if diff_ui and diff_ui.bufnr and api.nvim_buf_is_valid(diff_ui.bufnr) then
       vim.keymap.set("n", "ga", function()
-        if not filepath then
-          return vim.notify("CodeCompanion: no filepath for pending accept", vim.log.levels.WARN)
+        if not filepath or not index then
+          return vim.notify("CodeCompanion: no filepath/index for pending accept", vim.log.levels.WARN)
         end
-        local ok, err = require("user.codecompanion.pending_actions").accept_all(filepath)
+        local ok, err = require("user.codecompanion.pending_actions").accept_one(filepath, index)
         if ok then
-          vim.notify("CodeCompanion: accepted all pending", vim.log.levels.INFO)
+          vim.notify(("CodeCompanion: accepted pending #%d"):format(index), vim.log.levels.INFO)
           pcall(api.nvim_win_close, diff_ui.winnr, true)
         else
           vim.notify(("CodeCompanion: accept failed: %s"):format(err or "unknown"), vim.log.levels.ERROR)
         end
-      end, { buffer = diff_ui.bufnr, desc = "Accept all pending", nowait = true, silent = true })
+      end, { buffer = diff_ui.bufnr, desc = "Accept this pending", nowait = true, silent = true })
 
       vim.keymap.set("n", "gr", function()
         if not filepath or not index then
           return vim.notify("CodeCompanion: no filepath/index for pending reject", vim.log.levels.WARN)
         end
-        local ok, err = require("user.codecompanion.pending_actions").reject_to(filepath, index)
+        local ok, err = require("user.codecompanion.pending_actions").reject_one(filepath, index)
         if ok then
-          vim.notify(("CodeCompanion: rejected pending #%d and newer"):format(index), vim.log.levels.WARN)
+          vim.notify(("CodeCompanion: rejected pending #%d"):format(index), vim.log.levels.WARN)
           pcall(api.nvim_win_close, diff_ui.winnr, true)
         else
           vim.notify(("CodeCompanion: reject failed: %s"):format(err or "unknown"), vim.log.levels.ERROR)
@@ -856,6 +1123,16 @@ return {
 
       -- Inline diff in the edited buffer (VSCode-like: applied until rejected)
       if bufnr and api.nvim_buf_is_valid(bufnr) then
+        local base_original = original_content
+        pcall(function()
+          local pe = require("user.codecompanion.pending_edits")
+          local state = pe.get(path)
+          local entries = state and state.entries or {}
+          if #entries > 0 and type(entries[1].original) == "string" then
+            base_original = entries[1].original
+          end
+        end)
+
         local function show_diff_fn()
           if config.display.diff.enabled ~= true then
             return
@@ -864,7 +1141,7 @@ return {
             chat_bufnr = self.chat.bufnr,
             target_bufnr = bufnr,
             ft = vim.filetype.match({ filename = path }) or "text",
-            from_lines = split_lines(original_content),
+            from_lines = split_lines(base_original),
             to_lines = split_lines(edit.content),
             title = display_name,
             restore = restore,
@@ -872,10 +1149,12 @@ return {
         end
 
         vim.schedule(function()
-          apply_inline_diff(bufnr, original_content, edit.content, restore, show_diff_fn, true, {
+          apply_inline_diff(bufnr, base_original, edit.content, restore, show_diff_fn, true, {
             ft = vim.filetype.match({ filename = path }) or "text",
             title = display_name,
             explanation = action.explanation,
+            persist_original = original_content,
+            persist_proposed = edit.content,
           })
         end)
       end

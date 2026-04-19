@@ -121,6 +121,7 @@ function M.open(opts)
   local display_path = vim.fn.fnamemodify(filepath, ":.")
 
   local timeline_buf = api.nvim_create_buf(false, true)
+  pcall(api.nvim_buf_set_name, timeline_buf, ("CodeCompanionPendingTimeline:%s"):format(display_path))
   api.nvim_set_option_value("buftype", "nofile", { buf = timeline_buf })
   api.nvim_set_option_value("bufhidden", "wipe", { buf = timeline_buf })
   api.nvim_set_option_value("swapfile", false, { buf = timeline_buf })
@@ -137,7 +138,7 @@ function M.open(opts)
   end
 
   add(("Pending timeline: %s"):format(display_path), "Title")
-  add("q Close | <CR>/gv Diff view | gr Reject to here | ga Accept all | za Toggle fold", "Comment")
+  add("q Close | <CR>/gv Diff view | gr Reject this pending | ga Accept this pending | za Toggle fold", "Comment")
   add("", "")
 
   -- Newest first
@@ -177,22 +178,38 @@ function M.open(opts)
     end
   end
 
-  local width = math.min(math.max(90, math.floor(vim.o.columns * 0.75)), vim.o.columns - 4)
-  local height = math.min(math.max(25, math.floor(vim.o.lines * 0.75)), vim.o.lines - 6)
-  local row = math.floor((vim.o.lines - height) / 2) - 1
-  local col = math.floor((vim.o.columns - width) / 2)
+  local layout = opts.layout or "split" -- "split" | "float"
 
-  local win = api.nvim_open_win(timeline_buf, true, {
-    relative = "editor",
-    style = "minimal",
-    border = "rounded",
-    width = width,
-    height = height,
-    row = math.max(row, 0),
-    col = math.max(col, 0),
-    title = " CodeCompanion Pending Timeline ",
-    title_pos = "center",
-  })
+  local win
+  if layout == "float" then
+    local width = math.min(math.max(90, math.floor(vim.o.columns * 0.75)), vim.o.columns - 4)
+    local height = math.min(math.max(25, math.floor(vim.o.lines * 0.75)), vim.o.lines - 6)
+    local row = math.floor((vim.o.lines - height) / 2) - 1
+    local col = math.floor((vim.o.columns - width) / 2)
+
+    win = api.nvim_open_win(timeline_buf, true, {
+      relative = "editor",
+      style = "minimal",
+      border = "rounded",
+      width = width,
+      height = height,
+      row = math.max(row, 0),
+      col = math.max(col, 0),
+      title = " CodeCompanion Pending Timeline ",
+      title_pos = "center",
+    })
+  else
+    -- Open in a normal split so it behaves like a regular buffer (better for long review sessions).
+    vim.cmd("botright vsplit")
+    win = api.nvim_get_current_win()
+    api.nvim_win_set_buf(win, timeline_buf)
+
+    local target_width = math.min(120, math.max(80, math.floor(vim.o.columns * 0.45)))
+    pcall(api.nvim_win_set_width, win, target_width)
+    pcall(api.nvim_set_option_value, "winfixwidth", true, { win = win })
+    pcall(api.nvim_set_option_value, "wrap", false, { win = win })
+    pcall(api.nvim_set_option_value, "winbar", "CodeCompanion Pending Timeline", { win = win })
+  end
 
   -- Folding is window-local.
   pcall(api.nvim_set_option_value, "foldmethod", "marker", { win = win })
@@ -221,25 +238,31 @@ function M.open(opts)
   end, { buffer = timeline_buf, desc = "Open diff view", nowait = true, silent = true })
 
   vim.keymap.set("n", "ga", function()
-    local ok, err = require("user.codecompanion.pending_actions").accept_all(filepath)
+    local span = current_entry_for_row(timeline_buf, entry_spans)
+    if not span or not span.entry or not span.index then
+      return
+    end
+    local ok, err = require("user.codecompanion.pending_actions").accept_one(filepath, span.index)
     if ok then
-      vim.notify(("CodeCompanion: accepted all pending for %s"):format(display_path), vim.log.levels.INFO)
+      vim.notify(("CodeCompanion: accepted pending #%d for %s"):format(span.index, display_path), vim.log.levels.INFO)
+      pcall(api.nvim_win_close, win, true)
     else
       vim.notify(("CodeCompanion: accept failed: %s"):format(err or "unknown"), vim.log.levels.ERROR)
     end
-  end, { buffer = timeline_buf, desc = "Accept all pending", nowait = true, silent = true })
+  end, { buffer = timeline_buf, desc = "Accept this pending", nowait = true, silent = true })
 
   vim.keymap.set("n", "gr", function()
     local span = current_entry_for_row(timeline_buf, entry_spans)
     if not span or not span.entry or not span.index then
       return
     end
-    local ok, err = require("user.codecompanion.pending_actions").reject_to(filepath, span.index)
+    local ok, err = require("user.codecompanion.pending_actions").reject_one(filepath, span.index)
     if ok then
       vim.notify(
-        ("CodeCompanion: rejected pending #%d and newer for %s"):format(span.index, display_path),
+        ("CodeCompanion: rejected pending #%d for %s"):format(span.index, display_path),
         vim.log.levels.WARN
       )
+      pcall(api.nvim_win_close, win, true)
     else
       vim.notify(("CodeCompanion: reject failed: %s"):format(err or "unknown"), vim.log.levels.ERROR)
     end

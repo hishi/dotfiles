@@ -138,6 +138,37 @@ function M.truncate(filepath, keep_n)
 end
 
 ---@param filepath string
+---@param idx integer 1-based
+---@return table|nil removed
+function M.remove_at(filepath, idx)
+  if type(filepath) ~= "string" or filepath == "" then
+    return nil
+  end
+  idx = tonumber(idx)
+  if not idx then
+    return nil
+  end
+
+  local st = read_state()
+  local v = st[filepath]
+  if not v or type(v) ~= "table" or type(v.entries) ~= "table" or #v.entries == 0 then
+    return nil
+  end
+  if idx < 1 or idx > #v.entries then
+    return nil
+  end
+
+  local removed = table.remove(v.entries, idx)
+  if #v.entries == 0 then
+    st[filepath] = nil
+  else
+    st[filepath] = v
+  end
+  write_state(st)
+  return removed
+end
+
+---@param filepath string
 ---@param proposed string
 ---@return table|nil, integer|nil
 local function find_by_proposed(filepath, proposed)
@@ -192,22 +223,27 @@ function M.try_restore_for_buf(bufnr)
     return
   end
 
-  local entry = M.peek(filepath)
-  if not entry or type(entry) ~= "table" then
+  local state = M.get(filepath)
+  local entries = state and state.entries or {}
+  if #entries == 0 then
     return
   end
+
+  local entry = entries[#entries]
   if vim.bo[bufnr].modified then
     return
   end
 
   local current = buf_to_text(bufnr)
+  local idx = #entries
   if not equivalent_text(current, entry.proposed or "") then
-    -- The file/buffer may match an older pending entry (e.g. user rejected once).
-    local match, idx = find_by_proposed(filepath, current)
+    -- The file/buffer may match an older pending entry.
+    local match, found_idx = find_by_proposed(filepath, current)
     if not match then
       return
     end
     entry = match
+    idx = found_idx or idx
     -- Drop any newer entries that no longer match on disk.
     local st = read_state()
     if st[filepath] and st[filepath].entries and idx then
@@ -216,14 +252,18 @@ function M.try_restore_for_buf(bufnr)
       end
       write_state(st)
     end
+    state = M.get(filepath)
+    entries = state and state.entries or {}
   end
 
   local tool = require("user.codecompanion.tools.insert_edit_into_file")
   if type(tool.rehydrate_inline_diff) == "function" then
-    tool.rehydrate_inline_diff(bufnr, entry.original, entry.proposed, {
+    local base_original = entries[1] and entries[1].original or entry.original
+    tool.rehydrate_inline_diff(bufnr, base_original, entry.proposed, {
       filepath = filepath,
       title = entry.title,
       ft = entry.ft,
+      reject_to = entry.original,
     })
     vim.notify(("CodeCompanion: restored pending choice for %s"):format(vim.fn.fnamemodify(filepath, ":.")), vim.log.levels.INFO)
   end
