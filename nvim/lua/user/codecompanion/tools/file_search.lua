@@ -27,10 +27,7 @@ local function file_search(action, opts)
   -- Include dotfiles (e.g. `.vscode/`) unless excluded by globs/gitignore.
   table.insert(cmd, "--hidden")
 
-  local respect_gitignore = opts.respect_gitignore
-  if respect_gitignore == nil then
-    respect_gitignore = opts.respect_gitignore ~= false
-  end
+  local respect_gitignore = ignore.respect_gitignore(opts)
   if not respect_gitignore then
     table.insert(cmd, "--no-ignore")
   end
@@ -81,7 +78,7 @@ end
 return {
   name = "file_search",
   cmds = {
-    function(self, args, input)
+    function(self, args)
       return file_search(args, self.tool.opts)
     end,
   },
@@ -105,9 +102,6 @@ return {
         required = { "query" },
       },
     },
-  },
-  handlers = {
-    on_exit = function(self, meta) end,
   },
   output = {
     cmd_string = function(self, meta)
@@ -154,4 +148,3 @@ return {
     end,
   },
 }
-

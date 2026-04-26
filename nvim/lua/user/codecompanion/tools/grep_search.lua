@@ -25,10 +25,7 @@ local function grep_search(action, opts)
   local max_results = opts.max_results or 100
   local is_regexp = action.is_regexp or false
 
-  local respect_gitignore = opts.respect_gitignore
-  if respect_gitignore == nil then
-    respect_gitignore = opts.respect_gitignore ~= false
-  end
+  local respect_gitignore = ignore.respect_gitignore(opts)
 
   table.insert(cmd, "--json")
   table.insert(cmd, "--line-number")
@@ -116,7 +113,7 @@ end
 return {
   name = "grep_search",
   cmds = {
-    function(self, args, input)
+    function(self, args)
       return grep_search(args, self.tool.opts)
     end,
   },
@@ -138,9 +135,6 @@ return {
       },
     },
     type = "function",
-  },
-  handlers = {
-    on_exit = function(self, meta) end,
   },
   output = {
     cmd_string = function(self, opts)

@@ -38,4 +38,11 @@ function M.rg_exclude_globs(extra)
   return globs
 end
 
+function M.respect_gitignore(opts)
+  if type(opts) ~= "table" then
+    return true
+  end
+  return opts.respect_gitignore ~= false
+end
+
 return M

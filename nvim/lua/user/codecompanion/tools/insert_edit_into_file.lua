@@ -2,7 +2,6 @@ local Path = require("plenary.path")
 local buf_utils = require("codecompanion.utils.buffers")
 local file_utils = require("codecompanion.utils.files")
 
-local approvals = require("codecompanion.interactions.chat.tools.approvals")
 local constants = require("codecompanion.interactions.chat.tools.builtin.insert_edit_into_file.constants")
 local io_mod = require("codecompanion.interactions.chat.tools.builtin.insert_edit_into_file.io")
 local json_repair = require("codecompanion.interactions.chat.tools.builtin.insert_edit_into_file.json_repair")
@@ -10,6 +9,7 @@ local match_selector = require("codecompanion.interactions.chat.tools.builtin.in
 local process_mod = require("codecompanion.interactions.chat.tools.builtin.insert_edit_into_file.process")
 
 local config = require("codecompanion.config")
+local diff_ui_helpers = require("user.codecompanion.tools.insert_edit_diff_ui")
 
 local api = vim.api
 local fmt = string.format
@@ -19,19 +19,6 @@ local HELP_HL = "UserCodeCompanionInlineHelp"
 local PROPOSED_ADD_HL = "UserCodeCompanionProposedAdd"
 local PROPOSED_CHANGE_HL = "UserCodeCompanionProposedChange"
 local OLDLINE_HL = "UserCodeCompanionOldLine"
-
-local function has_hl(name)
-  local ok, hl = pcall(api.nvim_get_hl, 0, { name = name })
-  if not ok or not hl then
-    return false
-  end
-  return (hl.fg ~= nil) or (hl.bg ~= nil) or (hl.sp ~= nil) or (hl.link ~= nil)
-end
-
-local function has_bg(name)
-  local ok, hl = pcall(api.nvim_get_hl, 0, { name = name })
-  return ok and hl and (hl.bg ~= nil)
-end
 
 local function buf_win_width(bufnr)
   local win = (vim.fn.win_findbuf(bufnr) or {})[1]
@@ -116,65 +103,6 @@ local function split_lines(s)
   return vim.split(s, "\n", { plain = true })
 end
 
-local function join_lines(lines)
-  return table.concat(lines or {}, "\n")
-end
-
-local function has_trailing_newline(text)
-  return type(text) == "string" and text:sub(-1) == "\n"
-end
-
-local function ensure_trailing_newline(text, keep_newline)
-  text = text or ""
-  if keep_newline and text ~= "" and not has_trailing_newline(text) then
-    return text .. "\n"
-  end
-  return text
-end
-
-local function replace_line_range(lines, start_1, count, replacement)
-  lines = lines or {}
-  replacement = replacement or {}
-  start_1 = math.max(1, tonumber(start_1) or 1)
-  count = math.max(0, tonumber(count) or 0)
-
-  local out = {}
-  local head_end = math.min(#lines, start_1 - 1)
-  for i = 1, head_end do
-    out[#out + 1] = lines[i]
-  end
-  for i = 1, #replacement do
-    out[#out + 1] = replacement[i]
-  end
-  local tail_start = math.min(#lines + 1, start_1 + count)
-  for i = tail_start, #lines do
-    out[#out + 1] = lines[i]
-  end
-  return out
-end
-
-local function pick_hunk_at_cursor(hunks, row0)
-  if type(hunks) ~= "table" or #hunks == 0 then
-    return nil
-  end
-  local nearest = nil
-  local nearest_dist = math.huge
-  for _, h in ipairs(hunks) do
-    local b_start, b_count = h[3], h[4]
-    local start0 = math.max(0, (b_start or 1) - 1)
-    local end0 = (b_count or 0) > 0 and (start0 + b_count - 1) or start0
-    if row0 >= start0 and row0 <= end0 then
-      return h
-    end
-    local dist = row0 < start0 and (start0 - row0) or (row0 - end0)
-    if dist < nearest_dist then
-      nearest_dist = dist
-      nearest = h
-    end
-  end
-  return nearest
-end
-
 local function set_buffer_content(bufnr, content)
   if not bufnr or not api.nvim_buf_is_valid(bufnr) then
     return
@@ -199,7 +127,8 @@ local function clear_inline_visual(bufnr)
   pcall(vim.keymap.del, "n", "ga", { buffer = bufnr })
   pcall(vim.keymap.del, "n", "gr", { buffer = bufnr })
   pcall(vim.keymap.del, "n", "gv", { buffer = bufnr })
-  pcall(vim.keymap.del, "n", "gH", { buffer = bufnr })
+  pcall(vim.keymap.del, "n", "<cr>", { buffer = bufnr })
+  pcall(vim.keymap.del, "n", "gh", { buffer = bufnr })
 
   pcall(function()
     vim.b[bufnr].__user_codecompanion_inline_diff = nil
@@ -214,21 +143,13 @@ local function accept_inline(bufnr)
   end
   local st = vim.b[bufnr].__user_codecompanion_inline_diff_state
   local filepath = st and st.filepath or api.nvim_buf_get_name(bufnr)
-  local remaining = 0
   if filepath and filepath ~= "" then
     pcall(function()
       local pe = require("user.codecompanion.pending_edits")
-      pe.pop(filepath)
-      local state = pe.get(filepath)
-      remaining = state and state.entries and #state.entries or 0
+      pe.pop(filepath, "accepted")
     end)
   end
   clear_inline_visual(bufnr)
-  if filepath and filepath ~= "" and remaining > 0 then
-    pcall(function()
-      require("user.codecompanion.pending_edits").try_restore_for_buf(bufnr)
-    end)
-  end
 end
 
 local function reject_inline(bufnr, restore_fn)
@@ -245,19 +166,11 @@ local function reject_inline(bufnr, restore_fn)
 
   if filepath and filepath ~= "" then
     pcall(function()
-      require("user.codecompanion.pending_edits").pop(filepath)
+      require("user.codecompanion.pending_edits").pop(filepath, "rejected")
     end)
   end
 
   clear_inline_visual(bufnr)
-
-  -- If there is an older pending edit for this file and the buffer matches it,
-  -- rehydrate the inline diff so the user can resolve it next.
-  if filepath and filepath ~= "" then
-    pcall(function()
-      require("user.codecompanion.pending_edits").try_restore_for_buf(bufnr)
-    end)
-  end
 
   return true, nil
 end
@@ -311,7 +224,7 @@ local function apply_inline_diff(bufnr, original_content, new_content, restore_f
 
   local function set_help_banner_at(row0)
     ensure_help_hl()
-    local msg = " CodeCompanion  ga Accept  gr Reject  gv Diff  gH Timeline "
+    local msg = " CodeCompanion  ga Accept  gr Reject  <CR> Diff  gh History "
     row0 = clamp_row_0(row0)
     local indent = line_indent_at(row0)
     api.nvim_buf_set_extmark(bufnr, NS, row0, 0, {
@@ -401,22 +314,15 @@ local function apply_inline_diff(bufnr, original_content, new_content, restore_f
     set_help_banner_at(0)
   else
     table.sort(banner_rows)
-    for _, row0 in ipairs(banner_rows) do
-      set_help_banner_at(row0)
-    end
+    -- Show a single help banner per proposal to reduce visual noise.
+    set_help_banner_at(banner_rows[1])
   end
 
   vim.b[bufnr].__user_codecompanion_inline_diff = true
-  local persist_original = meta.persist_original or original_content
-  local persist_proposed = meta.persist_proposed or new_content
   vim.b[bufnr].__user_codecompanion_inline_diff_state = {
     filepath = api.nvim_buf_get_name(bufnr),
-    -- UI baseline (for highlight + diff view)
     original = original_content,
     proposed = new_content,
-    -- Persisted per-proposal snapshot (used by pending timeline + restore walking)
-    persist_original = persist_original,
-    persist_proposed = persist_proposed,
     ft = meta.ft or vim.bo[bufnr].filetype,
     title = meta.title or vim.fn.fnamemodify(api.nvim_buf_get_name(bufnr), ":."),
     explanation = meta.explanation,
@@ -428,187 +334,57 @@ local function apply_inline_diff(bufnr, original_content, new_content, restore_f
       local st = vim.b[bufnr].__user_codecompanion_inline_diff_state
       local id = pe.push({
         filepath = st.filepath,
-        original = st.persist_original,
-        proposed = st.persist_proposed,
+        original = st.original,
+        proposed = st.proposed,
         ft = st.ft,
         title = st.title,
         explanation = st.explanation,
         saved_at = st.saved_at,
       })
       vim.b[bufnr].__user_codecompanion_inline_diff_state.id = id
-      local filepath = vim.b[bufnr].__user_codecompanion_inline_diff_state.filepath
-      local persisted = filepath and pe.get(filepath) or nil
-      local count = persisted and persisted.entries and #persisted.entries or 0
-      if count > 1 then
-        vim.notify(
-          ("CodeCompanion: %d pending choices for this file (use gr repeatedly to walk back)"):format(count),
-          vim.log.levels.INFO
-        )
-      end
     end)
   end
 
-  local function persist_single_pending(base_text, proposed_text, state)
-    if not state or not state.filepath or state.filepath == "" then
-      return
-    end
-    pcall(function()
-      local pe = require("user.codecompanion.pending_edits")
-      pe.remove_all(state.filepath)
-      if base_text ~= proposed_text then
-        pe.push({
-          filepath = state.filepath,
-          original = base_text,
-          proposed = proposed_text,
-          ft = state.ft,
-          title = state.title,
-          explanation = state.explanation,
-          saved_at = os.time(),
-        })
-      end
-    end)
+  local function open_proposal_history()
+    require("user.codecompanion.proposal_history").open({ bufnr = bufnr, layout = "float" })
   end
 
-  local function refresh_inline_state(base_text, proposed_text, state)
-    if base_text == proposed_text then
-      if state and state.filepath and state.filepath ~= "" then
-        pcall(function()
-          require("user.codecompanion.pending_edits").remove_all(state.filepath)
-        end)
-      end
-      clear_inline_visual(bufnr)
-      vim.notify("CodeCompanion: all proposals resolved", vim.log.levels.INFO)
-      return
-    end
-
-    local function restore_all()
-      if not state or not state.filepath or state.filepath == "" then
-        return false, "No filepath"
-      end
-      local ok_write, err_write = pcall(function()
-        Path:new(state.filepath):write(base_text, "w")
-      end)
-      if not ok_write then
-        return false, err_write
-      end
-      if api.nvim_buf_is_valid(bufnr) then
-        set_buffer_content(bufnr, base_text)
-      end
-      return true, nil
-    end
-
-    local function show_diff_fn_current()
-      if config.display.diff.enabled ~= true then
-        return
-      end
-      show_diff({
-        chat_bufnr = nil,
-        target_bufnr = bufnr,
-        ft = state and state.ft or vim.bo[bufnr].filetype,
-        from_lines = split_lines(base_text),
-        to_lines = split_lines(proposed_text),
-        title = state and state.title or vim.fn.fnamemodify(api.nvim_buf_get_name(bufnr), ":."),
-        restore = restore_all,
-      })
-    end
-
-    persist_single_pending(base_text, proposed_text, state)
-    apply_inline_diff(bufnr, base_text, proposed_text, restore_all, show_diff_fn_current, false, {
-      ft = state and state.ft or vim.bo[bufnr].filetype,
-      title = state and state.title or vim.fn.fnamemodify(api.nvim_buf_get_name(bufnr), ":."),
-      explanation = state and state.explanation or nil,
-      persist_original = base_text,
-      persist_proposed = proposed_text,
-    })
-  end
-
-  local function resolve_hunk(action)
-    local state = vim.b[bufnr].__user_codecompanion_inline_diff_state
-    if not state then
-      return vim.notify("CodeCompanion: no active inline proposal", vim.log.levels.WARN)
-    end
-
-    local base_text = state.original or original_content
-    local current_text = join_lines(api.nvim_buf_get_lines(bufnr, 0, -1, false))
-    current_text = ensure_trailing_newline(current_text, has_trailing_newline(state.proposed or ""))
-    local hunks_now = vim.diff(base_text, current_text, { result_type = "indices" }) or {}
-    if #hunks_now == 0 then
-      return refresh_inline_state(base_text, current_text, state)
-    end
-
-    local row0 = api.nvim_win_get_cursor(0)[1] - 1
-    local h = pick_hunk_at_cursor(hunks_now, row0)
-    if not h then
-      return vim.notify("CodeCompanion: no proposal found at cursor", vim.log.levels.WARN)
-    end
-
-    local a_start, a_count, b_start, b_count = h[1], h[2], h[3], h[4]
-    local base_lines = split_lines(base_text)
-    local current_lines = split_lines(current_text)
-
-    if action == "accept" then
-      local accepted_lines = {}
-      for i = b_start, (b_start + b_count - 1) do
-        accepted_lines[#accepted_lines + 1] = current_lines[i] or ""
-      end
-      local new_base_lines = replace_line_range(base_lines, a_start, a_count, accepted_lines)
-      local new_base_text = join_lines(new_base_lines)
-      new_base_text = ensure_trailing_newline(new_base_text, has_trailing_newline(base_text))
-      refresh_inline_state(new_base_text, current_text, state)
-      vim.notify("CodeCompanion: accepted proposal at cursor", vim.log.levels.INFO)
-      return
-    end
-
-    if action == "reject" then
-      local original_lines = {}
-      for i = a_start, (a_start + a_count - 1) do
-        original_lines[#original_lines + 1] = base_lines[i] or ""
-      end
-      local new_current_lines = replace_line_range(current_lines, b_start, b_count, original_lines)
-      local new_current_text = join_lines(new_current_lines)
-      new_current_text = ensure_trailing_newline(new_current_text, has_trailing_newline(current_text))
-
-      if state.filepath and state.filepath ~= "" then
-        local ok_write, err_write = pcall(function()
-          Path:new(state.filepath):write(new_current_text, "w")
-        end)
-        if not ok_write then
-          return vim.notify("CodeCompanion: reject failed: " .. tostring(err_write), vim.log.levels.ERROR)
-        end
-      end
-
-      if api.nvim_buf_is_valid(bufnr) then
-        set_buffer_content(bufnr, new_current_text)
-      end
-      refresh_inline_state(base_text, new_current_text, state)
-      vim.notify("CodeCompanion: rejected proposal at cursor", vim.log.levels.WARN)
-      return
+  local function reject_current()
+    local ok, err = reject_inline(bufnr, restore_fn)
+    if ok then
+      vim.notify("CodeCompanion: proposal rejected (reverted)", vim.log.levels.WARN)
+    else
+      vim.notify("CodeCompanion: reject failed: " .. (err or "unknown"), vim.log.levels.ERROR)
     end
   end
 
   local function set_inline_keymaps()
     vim.keymap.set("n", "ga", function()
-      resolve_hunk("accept")
+      accept_inline(bufnr)
+      vim.notify("CodeCompanion: proposal accepted", vim.log.levels.INFO)
     end, { buffer = bufnr, desc = "CodeCompanion: Accept changes", nowait = true, silent = true })
 
     vim.keymap.set("n", "gr", function()
-      resolve_hunk("reject")
+      reject_current()
     end, { buffer = bufnr, desc = "CodeCompanion: Reject changes", nowait = true, silent = true })
 
     -- Backward-compatible fallback in case `gr` is shadowed by another plugin mapping.
     vim.keymap.set("n", "g3", function()
-      resolve_hunk("reject")
+      reject_current()
     end, { buffer = bufnr, desc = "CodeCompanion: Reject changes", nowait = true, silent = true })
 
     if type(show_diff_fn) == "function" then
-      vim.keymap.set("n", "gv", function()
+      vim.keymap.set("n", "<cr>", function()
         show_diff_fn()
       end, { buffer = bufnr, desc = "CodeCompanion: View diff", nowait = true, silent = true })
     end
 
-    vim.keymap.set("n", "gH", function()
-      require("user.codecompanion.pending_timeline").open({ bufnr = bufnr, layout = "float" })
-    end, { buffer = bufnr, desc = "CodeCompanion: Pending timeline", nowait = true, silent = true })
+    vim.keymap.set("n", "gh", open_proposal_history, {
+      buffer = bufnr,
+      desc = "CodeCompanion: Proposal history",
+      nowait = true,
+      silent = true,
+    })
   end
 
   set_inline_keymaps()
@@ -633,7 +409,7 @@ local function apply_inline_diff(bufnr, original_content, new_content, restore_f
     })
   end)
 
-  vim.notify("CodeCompanion: inline diff active (ga=accept, gr=reject, gv=view)", vim.log.levels.INFO)
+  vim.notify("CodeCompanion: inline diff active (ga=accept, gr=reject, <CR>=view, gh=history)", vim.log.levels.INFO)
 end
 
 local function show_diff(opts)
@@ -645,118 +421,13 @@ local function show_diff(opts)
   -- Here we build a custom merged view for this tool only:
   --   additions (new) first, then deletions (old).
 
-  local diff_mod = require("codecompanion.diff")
-  local diff_ui_mod = require("codecompanion.diff.ui")
-  local cc_utils = require("codecompanion.utils")
-
-  ---@param diff CC.Diff
-  ---@return CC.Diff
-  local function build_proposed_first_merged(diff)
-    local hunks = diff_mod._diff(diff.from.lines, diff.to.lines) or {}
-
-    local merged_lines = {} ---@type string[]
-    local highlights = {} ---@type { row: number, type: "addition"|"deletion"|"change", word_hl?: { col: number, end_col: number }[] }[]
-    local from_pos = 1
-    local merged_row = 0 -- number of merged lines so far (also the 0-based index for next insertion)
-
-    local function add_highlight(merged_row_1, type, word_ranges)
-      local e = { row = merged_row_1, type = type }
-      if word_ranges then
-        e.word_hl = word_ranges
-      end
-      table.insert(highlights, e)
-    end
-
-    local function add_extmark(hunk, merged_row_1, type)
-      table.insert(hunk.extmarks, { row = merged_row_1 - 1, col = 0, type = type })
-    end
-
-    for _, h in ipairs(hunks) do
-      local from_start, from_count, to_start, to_count = unpack(h)
-      local kind = from_count > 0 and to_count > 0 and "change" or from_count > 0 and "delete" or "add"
-
-      local stop_at = kind == "add" and from_start or from_start - 1
-      while from_pos <= stop_at do
-        merged_row = merged_row + 1
-        table.insert(merged_lines, diff.from.lines[from_pos])
-        from_pos = from_pos + 1
-      end
-
-      ---@type CodeCompanion.diff.Hunk
-      local hunk = {
-        extmarks = {},
-        kind = kind,
-        pos = { merged_row, 0 },
-        from_start = from_start,
-        from_count = from_count,
-        to_start = to_start,
-        to_count = to_count,
-      }
-      table.insert(diff.hunks, hunk)
-
-      -- For changes, compute word-level diffs (reused for both deletion/addition highlights).
-      local word_diff_results = {}
-      if kind == "change" then
-        for i = 0, math.min(from_count, to_count) - 1 do
-          local old_line = diff.from.lines[from_start + i] or ""
-          local new_line = diff.to.lines[to_start + i] or ""
-          local del_ranges, add_ranges = diff_mod._diff_words(old_line, new_line)
-          word_diff_results[i] = { del_ranges = del_ranges, add_ranges = add_ranges }
-        end
-      end
-
-      -- Add addition lines (proposed) first
-      for i = 0, to_count - 1 do
-        merged_row = merged_row + 1
-        add_extmark(hunk, merged_row, "addition")
-        table.insert(merged_lines, diff.to.lines[to_start + i])
-
-        local word_ranges = word_diff_results[i] and word_diff_results[i].add_ranges or nil
-        add_highlight(merged_row, "addition", word_ranges)
-      end
-
-      -- Then add deletion lines (original)
-      for i = 0, from_count - 1 do
-        merged_row = merged_row + 1
-        add_extmark(hunk, merged_row, "deletion")
-        table.insert(merged_lines, diff.from.lines[from_start + i])
-
-        local word_ranges = word_diff_results[i] and word_diff_results[i].del_ranges or nil
-        add_highlight(merged_row, "deletion", word_ranges)
-      end
-
-      from_pos = from_pos + from_count
-    end
-
-    while from_pos <= #diff.from.lines do
-      merged_row = merged_row + 1
-      table.insert(merged_lines, diff.from.lines[from_pos])
-      from_pos = from_pos + 1
-    end
-
-    diff.merged = { lines = merged_lines, highlights = highlights }
-    return diff
-  end
-
-  local bufnr = vim.api.nvim_create_buf(false, true)
-  if opts.ft then
-    local safe_ft = cc_utils.safe_filetype(opts.ft)
-    vim.api.nvim_set_option_value("filetype", safe_ft, { buf = bufnr })
-  end
-
-  ---@type CC.Diff
-  local diff = {
-    bufnr = bufnr,
+  local _, diff_ui_mod, diff = diff_ui_helpers.build_diff_for_ui({
     ft = opts.ft,
-    hunks = {},
-    from = { lines = opts.from_lines, text = table.concat(opts.from_lines, "\n") },
-    to = { lines = opts.to_lines, text = table.concat(opts.to_lines, "\n") },
-    merged = { lines = {}, highlights = {} },
+    from_lines = opts.from_lines,
+    to_lines = opts.to_lines,
     marker_add = opts.marker_add,
     marker_delete = opts.marker_delete,
-  }
-
-  diff = build_proposed_first_merged(diff)
+  })
 
   local diff_ui = diff_ui_mod.show(diff, {
     banner = (function()
@@ -795,30 +466,7 @@ local function show_diff(opts)
     tool_name = "insert_edit_into_file",
   })
 
-  -- Remap accept/reject for this diff buffer only.
-  -- (Keep upstream navigation keys and other defaults intact.)
-  if diff_ui and diff_ui.bufnr and api.nvim_buf_is_valid(diff_ui.bufnr) then
-    local shared = require("codecompanion.config").interactions.shared.keymaps
-    local function del_map(map)
-      if not map or not map.modes then
-        return
-      end
-      for mode, lhs in pairs(map.modes) do
-        pcall(vim.keymap.del, mode, lhs, { buffer = diff_ui.bufnr })
-      end
-    end
-    del_map(shared.accept_change)
-    del_map(shared.reject_change)
-
-    local diff_keymaps = require("codecompanion.diff.keymaps")
-    vim.keymap.set("n", "ga", function()
-      diff_keymaps.accept_change.callback(diff_ui)
-    end, { buffer = diff_ui.bufnr, desc = "Accept all changes", nowait = true, silent = true })
-
-    vim.keymap.set("n", "gr", function()
-      diff_keymaps.reject_change.callback(diff_ui)
-    end, { buffer = diff_ui.bufnr, desc = "Reject all changes", nowait = true, silent = true })
-  end
+  diff_ui_helpers.remap_diff_accept_reject_keymaps(diff_ui)
 end
 
 ---@class CodeCompanion.Tool.InsertEditIntoFile: CodeCompanion.Tools.Tool
@@ -881,7 +529,7 @@ return {
   end,
   ---Show a pending diff in CodeCompanion's diff UI.
   ---@param entry { original: string, proposed: string, ft?: string, title?: string }
-  ---@param meta? { title?: string, ft?: string, filepath?: string, index?: integer }
+  ---@param meta? { title?: string, ft?: string, filepath?: string, index?: integer, read_only?: boolean }
   show_pending_diff = function(entry, meta)
     if not entry or type(entry) ~= "table" then
       return
@@ -890,112 +538,17 @@ return {
     local proposed = entry.proposed or ""
     local ft = (meta and meta.ft) or entry.ft or "text"
     local title = (meta and meta.title) or entry.title or "pending"
-    local filepath = meta and meta.filepath or nil
-    local index = meta and meta.index or nil
+    local read_only = not not (meta and meta.read_only)
 
-    local diff_mod = require("codecompanion.diff")
-    local diff_ui_mod = require("codecompanion.diff.ui")
-    local cc_utils = require("codecompanion.utils")
-
-    ---@param diff CC.Diff
-    ---@return CC.Diff
-    local function build_proposed_first_merged(diff)
-      local hunks = diff_mod._diff(diff.from.lines, diff.to.lines) or {}
-      local merged_lines = {} ---@type string[]
-      local highlights = {} ---@type { row: number, type: "addition"|"deletion"|"change", word_hl?: { col: number, end_col: number }[] }[]
-      local from_pos = 1
-      local merged_row = 0
-
-      local function add_highlight(merged_row_1, type, word_ranges)
-        local e = { row = merged_row_1, type = type }
-        if word_ranges then
-          e.word_hl = word_ranges
-        end
-        table.insert(highlights, e)
-      end
-
-      local function add_extmark(hunk, merged_row_1, type)
-        table.insert(hunk.extmarks, { row = merged_row_1 - 1, col = 0, type = type })
-      end
-
-      for _, h in ipairs(hunks) do
-        local from_start, from_count, to_start, to_count = unpack(h)
-        local kind = from_count > 0 and to_count > 0 and "change" or from_count > 0 and "delete" or "add"
-
-        local stop_at = kind == "add" and from_start or from_start - 1
-        while from_pos <= stop_at do
-          merged_row = merged_row + 1
-          table.insert(merged_lines, diff.from.lines[from_pos])
-          from_pos = from_pos + 1
-        end
-
-        local hunk = {
-          extmarks = {},
-          kind = kind,
-          pos = { merged_row, 0 },
-          from_start = from_start,
-          from_count = from_count,
-          to_start = to_start,
-          to_count = to_count,
-        }
-        table.insert(diff.hunks, hunk)
-
-        local word_diff_results = {}
-        if kind == "change" then
-          for i = 0, math.min(from_count, to_count) - 1 do
-            local old_line = diff.from.lines[from_start + i] or ""
-            local new_line = diff.to.lines[to_start + i] or ""
-            local del_ranges, add_ranges = diff_mod._diff_words(old_line, new_line)
-            word_diff_results[i] = { del_ranges = del_ranges, add_ranges = add_ranges }
-          end
-        end
-
-        for i = 0, to_count - 1 do
-          merged_row = merged_row + 1
-          add_extmark(hunk, merged_row, "addition")
-          table.insert(merged_lines, diff.to.lines[to_start + i])
-          local word_ranges = word_diff_results[i] and word_diff_results[i].add_ranges or nil
-          add_highlight(merged_row, "addition", word_ranges)
-        end
-
-        for i = 0, from_count - 1 do
-          merged_row = merged_row + 1
-          add_extmark(hunk, merged_row, "deletion")
-          table.insert(merged_lines, diff.from.lines[from_start + i])
-          local word_ranges = word_diff_results[i] and word_diff_results[i].del_ranges or nil
-          add_highlight(merged_row, "deletion", word_ranges)
-        end
-
-        from_pos = from_pos + from_count
-      end
-
-      while from_pos <= #diff.from.lines do
-        merged_row = merged_row + 1
-        table.insert(merged_lines, diff.from.lines[from_pos])
-        from_pos = from_pos + 1
-      end
-
-      diff.merged = { lines = merged_lines, highlights = highlights }
-      return diff
-    end
-
-    local bufnr = api.nvim_create_buf(false, true)
-    local safe_ft = cc_utils.safe_filetype(ft)
-    api.nvim_set_option_value("filetype", safe_ft, { buf = bufnr })
-
-    local diff = {
-      bufnr = bufnr,
+    local _, diff_ui_mod, diff = diff_ui_helpers.build_diff_for_ui({
       ft = ft,
-      hunks = {},
-      from = { lines = split_lines(original), text = original },
-      to = { lines = split_lines(proposed), text = proposed },
-      merged = { lines = {}, highlights = {} },
-    }
-
-    diff = build_proposed_first_merged(diff)
+      from_lines = split_lines(original),
+      to_lines = split_lines(proposed),
+    })
 
     local diff_ui = diff_ui_mod.show(diff, {
-      banner = " [Pending]  ga Accept this pending | gr Reject this pending | ]c/[c Next/Prev hunks | q Close ",
+      banner = read_only and " [Proposal History] Read-only | ]c/[c Next/Prev hunks | q Close "
+        or " [Pending]  ga Accept this pending | gr Reject this pending | ]c/[c Next/Prev hunks | q Close ",
       diff_id = math.random(10000000),
       inline = false,
       skip_default_keymaps = true,
@@ -1003,32 +556,8 @@ return {
       tool_name = "insert_edit_into_file",
     })
 
-    if diff_ui and diff_ui.bufnr and api.nvim_buf_is_valid(diff_ui.bufnr) then
-      vim.keymap.set("n", "ga", function()
-        if not filepath or not index then
-          return vim.notify("CodeCompanion: no filepath/index for pending accept", vim.log.levels.WARN)
-        end
-        local ok, err = require("user.codecompanion.pending_actions").accept_one(filepath, index)
-        if ok then
-          vim.notify(("CodeCompanion: accepted pending #%d"):format(index), vim.log.levels.INFO)
-          pcall(api.nvim_win_close, diff_ui.winnr, true)
-        else
-          vim.notify(("CodeCompanion: accept failed: %s"):format(err or "unknown"), vim.log.levels.ERROR)
-        end
-      end, { buffer = diff_ui.bufnr, desc = "Accept this pending", nowait = true, silent = true })
-
-      vim.keymap.set("n", "gr", function()
-        if not filepath or not index then
-          return vim.notify("CodeCompanion: no filepath/index for pending reject", vim.log.levels.WARN)
-        end
-        local ok, err = require("user.codecompanion.pending_actions").reject_one(filepath, index)
-        if ok then
-          vim.notify(("CodeCompanion: rejected pending #%d"):format(index), vim.log.levels.WARN)
-          pcall(api.nvim_win_close, diff_ui.winnr, true)
-        else
-          vim.notify(("CodeCompanion: reject failed: %s"):format(err or "unknown"), vim.log.levels.ERROR)
-        end
-      end, { buffer = diff_ui.bufnr, desc = "Reject to here", nowait = true, silent = true })
+    if read_only then
+      diff_ui_helpers.set_read_only_diff_keymaps(diff_ui)
     end
   end,
   cmds = {
@@ -1123,16 +652,6 @@ return {
 
       -- Inline diff in the edited buffer (VSCode-like: applied until rejected)
       if bufnr and api.nvim_buf_is_valid(bufnr) then
-        local base_original = original_content
-        pcall(function()
-          local pe = require("user.codecompanion.pending_edits")
-          local state = pe.get(path)
-          local entries = state and state.entries or {}
-          if #entries > 0 and type(entries[1].original) == "string" then
-            base_original = entries[1].original
-          end
-        end)
-
         local function show_diff_fn()
           if config.display.diff.enabled ~= true then
             return
@@ -1141,7 +660,7 @@ return {
             chat_bufnr = self.chat.bufnr,
             target_bufnr = bufnr,
             ft = vim.filetype.match({ filename = path }) or "text",
-            from_lines = split_lines(base_original),
+            from_lines = split_lines(original_content),
             to_lines = split_lines(edit.content),
             title = display_name,
             restore = restore,
@@ -1149,12 +668,10 @@ return {
         end
 
         vim.schedule(function()
-          apply_inline_diff(bufnr, base_original, edit.content, restore, show_diff_fn, true, {
+          apply_inline_diff(bufnr, original_content, edit.content, restore, show_diff_fn, true, {
             ft = vim.filetype.match({ filename = path }) or "text",
             title = display_name,
             explanation = action.explanation,
-            persist_original = original_content,
-            persist_proposed = edit.content,
           })
         end)
       end

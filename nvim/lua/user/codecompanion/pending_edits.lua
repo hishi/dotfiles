@@ -2,6 +2,17 @@ local M = {}
 
 local api = vim.api
 
+local function normalize_path(path)
+  if type(path) ~= "string" or path == "" then
+    return path
+  end
+  local rp = vim.uv.fs_realpath(path)
+  if type(rp) == "string" and rp ~= "" then
+    return rp
+  end
+  return path
+end
+
 local function state_path()
   local dir = vim.fn.stdpath("state") .. "/codecompanion"
   vim.fn.mkdir(dir, "p")
@@ -25,7 +36,6 @@ local function read_state()
   if not ok2 or type(decoded) ~= "table" then
     return {}
   end
-  -- Backward compat: old format was { [filepath] = entry }
   for fp, v in pairs(decoded) do
     if type(v) == "table" and v.original and v.proposed then
       decoded[fp] = { entries = { v } }
@@ -41,29 +51,88 @@ local function write_state(tbl)
   f:close()
 end
 
+local function equivalent_text(a, b)
+  if a == b then
+    return true
+  end
+  if not a or not b then
+    return false
+  end
+  if (a .. "\n") == b then
+    return true
+  end
+  if (b .. "\n") == a then
+    return true
+  end
+  return false
+end
+
+local function buf_to_text(bufnr)
+  local lines = api.nvim_buf_get_lines(bufnr, 0, -1, false)
+  return table.concat(lines, "\n")
+end
+
+local function get_entries_for_state(st, filepath)
+  local bucket = st[filepath]
+  if type(bucket) ~= "table" or type(bucket.entries) ~= "table" then
+    return {}
+  end
+  return bucket.entries
+end
+
+local function archive_entries(filepath, entries, reason)
+  if type(entries) ~= "table" or #entries == 0 then
+    return
+  end
+  local ok, hist = pcall(require, "user.codecompanion.pending_history")
+  if not ok or type(hist) ~= "table" or type(hist.append_many) ~= "function" then
+    return
+  end
+  pcall(hist.append_many, filepath, entries, reason)
+end
+
+local function new_session_id()
+  return tostring(os.time()) .. ":" .. tostring(math.random(100000, 999999))
+end
+
 ---@param entry { filepath: string, original: string, proposed: string, title?: string, ft?: string, saved_at?: integer }
 function M.push(entry)
   if not entry or type(entry.filepath) ~= "string" or entry.filepath == "" then
     return
   end
+  entry.filepath = normalize_path(entry.filepath)
+
   local st = read_state()
-  st[entry.filepath] = st[entry.filepath] or { entries = {} }
-  st[entry.filepath].entries = st[entry.filepath].entries or {}
-  entry.id = entry.id or (tostring(os.time()) .. ":" .. tostring(math.random(100000, 999999)))
-  table.insert(st[entry.filepath].entries, entry)
+  local old_entries = get_entries_for_state(st, entry.filepath)
+  local session_id = nil
+  if #old_entries > 0 then
+    session_id = old_entries[#old_entries].session_id or old_entries[1].session_id
+  end
+  session_id = session_id or entry.session_id or new_session_id()
+  if #old_entries > 0 then
+    archive_entries(entry.filepath, old_entries, "superseded")
+  end
+
+  entry.session_id = session_id
+  entry.id = entry.id or new_session_id()
+  st[entry.filepath] = { entries = { entry } }
   write_state(st)
   return entry.id
 end
 
 ---@param filepath string
-function M.remove_all(filepath)
+---@param reason? string
+function M.remove_all(filepath, reason)
+  filepath = normalize_path(filepath)
   if type(filepath) ~= "string" or filepath == "" then
     return
   end
   local st = read_state()
-  if st[filepath] == nil then
+  local old_entries = get_entries_for_state(st, filepath)
+  if #old_entries == 0 and st[filepath] == nil then
     return
   end
+  archive_entries(filepath, old_entries, reason or "cleared")
   st[filepath] = nil
   write_state(st)
 end
@@ -71,9 +140,10 @@ end
 ---@param filepath string
 ---@return table|nil
 function M.get(filepath)
+  filepath = normalize_path(filepath)
   local st = read_state()
   local v = st[filepath]
-  if type(v) == "table" and v.entries then
+  if type(v) == "table" and type(v.entries) == "table" then
     return v
   end
   return nil
@@ -82,6 +152,7 @@ end
 ---@param filepath string
 ---@return table|nil
 function M.peek(filepath)
+  filepath = normalize_path(filepath)
   local v = M.get(filepath)
   if not v or type(v.entries) ~= "table" then
     return nil
@@ -90,21 +161,26 @@ function M.peek(filepath)
 end
 
 ---@param filepath string
+---@param reason? string
 ---@return table|nil
-function M.pop(filepath)
+function M.pop(filepath, reason)
+  filepath = normalize_path(filepath)
   if type(filepath) ~= "string" or filepath == "" then
     return nil
   end
   local st = read_state()
-  local v = st[filepath]
-  if not v or type(v) ~= "table" or type(v.entries) ~= "table" or #v.entries == 0 then
+  local entries = get_entries_for_state(st, filepath)
+  if #entries == 0 then
     return nil
   end
-  local popped = table.remove(v.entries, #v.entries)
-  if #v.entries == 0 then
+
+  local popped = table.remove(entries, #entries)
+  archive_entries(filepath, { popped }, reason or "popped")
+
+  if #entries == 0 then
     st[filepath] = nil
   else
-    st[filepath] = v
+    st[filepath] = { entries = entries }
   end
   write_state(st)
   return popped
@@ -113,98 +189,30 @@ end
 ---@param filepath string
 ---@param keep_n integer
 function M.truncate(filepath, keep_n)
+  filepath = normalize_path(filepath)
   if type(filepath) ~= "string" or filepath == "" then
     return
   end
   keep_n = tonumber(keep_n) or 0
-  local st = read_state()
-  local v = st[filepath]
-  if not v or type(v) ~= "table" or type(v.entries) ~= "table" then
-    return
-  end
   if keep_n <= 0 then
-    st[filepath] = nil
-    write_state(st)
+    M.remove_all(filepath, "truncated")
     return
   end
-  if keep_n >= #v.entries then
+  if keep_n >= 1 then
     return
   end
-  while #v.entries > keep_n do
-    table.remove(v.entries, #v.entries)
-  end
-  st[filepath] = v
-  write_state(st)
 end
 
 ---@param filepath string
----@param idx integer 1-based
----@return table|nil removed
+---@param idx integer
+---@return table|nil
 function M.remove_at(filepath, idx)
-  if type(filepath) ~= "string" or filepath == "" then
-    return nil
-  end
+  filepath = normalize_path(filepath)
   idx = tonumber(idx)
-  if not idx then
+  if idx ~= 1 then
     return nil
   end
-
-  local st = read_state()
-  local v = st[filepath]
-  if not v or type(v) ~= "table" or type(v.entries) ~= "table" or #v.entries == 0 then
-    return nil
-  end
-  if idx < 1 or idx > #v.entries then
-    return nil
-  end
-
-  local removed = table.remove(v.entries, idx)
-  if #v.entries == 0 then
-    st[filepath] = nil
-  else
-    st[filepath] = v
-  end
-  write_state(st)
-  return removed
-end
-
----@param filepath string
----@param proposed string
----@return table|nil, integer|nil
-local function find_by_proposed(filepath, proposed)
-  local v = M.get(filepath)
-  if not v or type(v.entries) ~= "table" then
-    return nil, nil
-  end
-  for i = #v.entries, 1, -1 do
-    if equivalent_text(v.entries[i].proposed or "", proposed or "") then
-      return v.entries[i], i
-    end
-  end
-  return nil, nil
-end
-
-local function buf_to_text(bufnr)
-  local lines = api.nvim_buf_get_lines(bufnr, 0, -1, false)
-  return table.concat(lines, "\n")
-end
-
-local function equivalent_text(a, b)
-  if a == b then
-    return true
-  end
-  if not a or not b then
-    return false
-  end
-  -- Be tolerant about a single trailing newline difference because CodeCompanion's
-  -- file writer preserves the original file's trailing newline behavior.
-  if (a .. "\n") == b then
-    return true
-  end
-  if (b .. "\n") == a then
-    return true
-  end
-  return false
+  return M.pop(filepath, "removed")
 end
 
 ---@param bufnr number
@@ -218,52 +226,33 @@ function M.try_restore_for_buf(bufnr)
   if vim.bo[bufnr].buftype ~= "" then
     return
   end
-  local filepath = api.nvim_buf_get_name(bufnr)
-  if not filepath or filepath == "" then
-    return
-  end
-
-  local state = M.get(filepath)
-  local entries = state and state.entries or {}
-  if #entries == 0 then
-    return
-  end
-
-  local entry = entries[#entries]
   if vim.bo[bufnr].modified then
     return
   end
 
+  local filepath = api.nvim_buf_get_name(bufnr)
+  filepath = normalize_path(filepath)
+  if not filepath or filepath == "" then
+    return
+  end
+
+  local entry = M.peek(filepath)
+  if not entry then
+    return
+  end
+
   local current = buf_to_text(bufnr)
-  local idx = #entries
   if not equivalent_text(current, entry.proposed or "") then
-    -- The file/buffer may match an older pending entry.
-    local match, found_idx = find_by_proposed(filepath, current)
-    if not match then
-      return
-    end
-    entry = match
-    idx = found_idx or idx
-    -- Drop any newer entries that no longer match on disk.
-    local st = read_state()
-    if st[filepath] and st[filepath].entries and idx then
-      while #st[filepath].entries > idx do
-        table.remove(st[filepath].entries, #st[filepath].entries)
-      end
-      write_state(st)
-    end
-    state = M.get(filepath)
-    entries = state and state.entries or {}
+    return
   end
 
   local tool = require("user.codecompanion.tools.insert_edit_into_file")
   if type(tool.rehydrate_inline_diff) == "function" then
-    local base_original = entries[1] and entries[1].original or entry.original
-    tool.rehydrate_inline_diff(bufnr, base_original, entry.proposed, {
+    tool.rehydrate_inline_diff(bufnr, entry.original or "", entry.proposed or "", {
       filepath = filepath,
       title = entry.title,
       ft = entry.ft,
-      reject_to = entry.original,
+      reject_to = entry.original or "",
     })
     vim.notify(("CodeCompanion: restored pending choice for %s"):format(vim.fn.fnamemodify(filepath, ":.")), vim.log.levels.INFO)
   end
