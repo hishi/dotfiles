@@ -1,2 +1,24 @@
 os:
   editPreset: "nvim"
+
+gui:
+  authorColors:
+    "*": "default"
+  sidePanelWidth: 0.16
+  mainPanelSplitMode: horizontal
+  enlargedSideViewLocation: top
+  screenMode: normal
+  showCommandLog: false
+  expandFocusedSidePanel: false
+  wrapLinesInStagingView: false
+
+git:
+  ignoreWhitespaceInDiffView: true
+  diffContextSize: 5
+  branchLogCmd: "git log --graph --decorate --color=always --pretty='%C(auto)%h%Creset %s %C(auto)%d%Creset' {{branchName}} --"
+  allBranchesLogCmds:
+    - "git log --graph --decorate --color=always --pretty='%C(auto)%h%Creset %s %C(auto)%d%Creset' --all"
+  pagers:
+    - colorArg: always
+      pager: "delta --paging=never --side-by-side --dark --line-fill-method=spaces --hunk-header-style='syntax' --file-style='bold' --file-decoration-style=none --plus-style='syntax #2a4556' --plus-emph-style='syntax bold #394b70' --minus-style='syntax #4b2a3d' --minus-emph-style='syntax bold #633540' --zero-style='normal normal' --line-numbers-left-style='#4a4a4a' --line-numbers-right-style='#4a4a4a' --line-numbers-minus-style='#4a4a4a' --line-numbers-zero-style='#4a4a4a' --line-numbers-plus-style='#4a4a4a'"
+      useConfig: false

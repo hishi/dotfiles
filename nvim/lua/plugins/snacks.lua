@@ -25,6 +25,13 @@ return {
         border = "rounded",
       },
     },
+    lazygit = {
+      win = {
+        width = 0,
+        height = 0,
+        border = "none",
+      },
+    },
     dashboard = {
       -- your dashboard configuration comes here
       -- or leave it empty to use the default settings
