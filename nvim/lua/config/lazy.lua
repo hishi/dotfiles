@@ -32,6 +32,14 @@ require("lazy").setup({
     { import = "plugins.neogit" },
     { import = "plugins.diffview" },
     { import = "plugins.gitgraph" },
+    { import = "plugins.git-blame" },
+    { import = "plugins.treesj" },
+    { import = "plugins.vim-wordmotion" },
+    { import = "plugins.overseer" },
+    { import = "plugins.kulala" },
+    { import = "plugins.git-worktree" },
+    { import = "plugins.yanky" },
+    { import = "plugins.nvim-surround" },
   },
   defaults = {
     -- By default, only LazyVim plugins will be lazy-loaded. Your custom plugins will load during startup.
