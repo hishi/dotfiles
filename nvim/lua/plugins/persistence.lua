@@ -17,9 +17,16 @@ return {
           vim.schedule(function()
             require("persistence").load()
             vim.schedule(function()
+              local ok, gitsigns = pcall(require, "gitsigns")
+              if not ok then
+                return
+              end
               for _, buf in ipairs(vim.api.nvim_list_bufs()) do
-                if vim.api.nvim_buf_is_loaded(buf) then
-                  require("gitsigns").attach(buf)
+                if vim.api.nvim_buf_is_loaded(buf)
+                  and vim.bo[buf].buftype == ""
+                  and vim.api.nvim_buf_get_name(buf) ~= ""
+                then
+                  gitsigns.attach(buf)
                 end
               end
             end)
