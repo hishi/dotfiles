@@ -17,7 +17,7 @@ function M.setup()
     require("user.codecompanion.proposal_history").open()
   end, { desc = "Show proposal history for current file" })
 
-  vim.keymap.set("n", "<leader>cch", "<cmd>CodeCompanionProposalHistory<cr>", { desc = "Proposal History" })
+  vim.keymap.set("n", "<leader>cch", "<cmd>CodeCompanionHistory<cr>", { desc = "Chat History" })
 end
 
 return M
