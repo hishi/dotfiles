@@ -68,9 +68,18 @@ function M.pick_files_into_chat(chat)
   return open_picker()
 end
 
+function M.pick_model_for_chat(chat)
+  require("codecompanion.interactions.chat.keymaps.change_adapter").select_model(chat)
+end
+
 function M.chat_keymaps()
   return {
     change_adapter = false,
+    change_model = {
+      description = "[Chat] Change model",
+      modes = { n = "gm" },
+      callback = M.pick_model_for_chat,
+    },
     add_files = {
       description = "[Chat] Add file(s) to context",
       modes = { n = "ga" },
