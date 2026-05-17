@@ -40,6 +40,7 @@ require("lazy").setup({
     { import = "plugins.git-worktree" },
     { import = "plugins.yanky" },
     { import = "plugins.nvim-surround" },
+    { import = "plugins.grug-far" },
   },
   defaults = {
     -- By default, only LazyVim plugins will be lazy-loaded. Your custom plugins will load during startup.
