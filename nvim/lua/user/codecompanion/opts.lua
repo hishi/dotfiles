@@ -1,10 +1,12 @@
 local chat_keymaps = require("user.codecompanion.chat.keymaps")
 local history_opts = require("user.codecompanion.history_opts")
+local prompt_library = require("user.codecompanion.prompt_library")
 local responses_patch = require("user.codecompanion.patches.copilot_responses_parse_chat")
 local system_prompt = require("user.codecompanion.system_prompt")
 
 return {
   language = "Japanese",
+  prompt_library = prompt_library,
   extensions = {
     history = {
       enabled = true,

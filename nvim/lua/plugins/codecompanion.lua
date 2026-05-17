@@ -13,6 +13,7 @@ return {
       "CodeCompanionChat",
       "CodeCompanionCmd",
     },
+    ft = { "gitcommit" },
     keys = {
       { "<leader>ccm", "<cmd>CodeCompanionActions<cr>", mode = { "n", "v" }, desc = "AI Actions" },
       { "<C-;>", "<cmd>CodeCompanionChat Toggle<cr>", mode = { "n", "v", "i" }, desc = "AI Chat Toggle" },
