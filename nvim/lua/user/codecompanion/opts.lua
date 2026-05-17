@@ -43,6 +43,22 @@ return {
     },
   },
   interactions = {
+    shared = {
+      keymaps = {
+        always_accept = {
+          modes = { n = "gA" },
+        },
+        accept_change = {
+          modes = { n = "ga" },
+        },
+        reject_change = {
+          modes = { n = "gr" },
+        },
+        cancel = {
+          modes = { n = "gc" },
+        },
+      },
+    },
     chat = {
       adapter = "copilot",
       opts = {

@@ -12,6 +12,8 @@ gui:
   expandFocusedSidePanel: false
   wrapLinesInStagingView: false
 
+promptToReturnFromSubprocess: true
+
 git:
   ignoreWhitespaceInDiffView: true
   diffContextSize: 5
