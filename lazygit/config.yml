@@ -12,7 +12,7 @@ gui:
   expandFocusedSidePanel: false
   wrapLinesInStagingView: false
 
-promptToReturnFromSubprocess: true
+promptToReturnFromSubprocess: false
 
 git:
   ignoreWhitespaceInDiffView: true
