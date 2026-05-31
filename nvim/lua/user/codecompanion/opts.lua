@@ -1,8 +1,23 @@
 local chat_keymaps = require("user.codecompanion.chat.keymaps")
-local history_opts = require("user.codecompanion.history_opts")
 local prompt_library = require("user.codecompanion.prompt_library")
 local responses_patch = require("user.codecompanion.patches.copilot_responses_parse_chat")
 local system_prompt = require("user.codecompanion.system_prompt")
+
+local function format_history_title_datetime_prefix(original_title)
+  if original_title == "Deciding title..." or original_title == "Refreshing title..." then
+    return original_title
+  end
+
+  local title = vim.trim(original_title or "")
+  local dt = os.date("%Y-%m-%d %H:%M", os.time())
+  if title == "" then
+    return dt
+  end
+  if title:match("^%d%d%d%d%-%d%d%-%d%d %d%d:%d%d") then
+    return title
+  end
+  return ("%s %s"):format(dt, title)
+end
 
 return {
   language = "Japanese",
@@ -10,7 +25,11 @@ return {
   extensions = {
     history = {
       enabled = true,
-      opts = history_opts.opts(),
+      opts = {
+        title_generation_opts = {
+          format_title = format_history_title_datetime_prefix,
+        },
+      },
     },
   },
   adapters = {
