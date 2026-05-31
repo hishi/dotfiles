@@ -10,7 +10,7 @@ alias find='fd'
 # alias cdf='cd "$(dirname "$(fzf --preview="bat --color=always {}")")"'
 alias grep='rg'
 alias ls='eza'
-alias cat='bat'
+# alias cat='bat'
 export EZA_CONFIG_DIR=~/.config/eza
 
 eval "$(mise activate zsh)"
@@ -41,4 +41,7 @@ source ~/.zsh/zsh-syntax-highlighting/zsh-syntax-highlighting.zsh
 # zoxide
 eval "$(zoxide init zsh)"
 
-
+# neovim で C-q を使うためターミナル側のショートカットを無効化
+if [[ -o interactive ]]; then
+  stty -ixon
+fi

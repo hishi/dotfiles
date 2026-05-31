@@ -71,6 +71,30 @@ vim.api.nvim_create_autocmd("BufEnter", {
   end,
 })
 
+-- quickfix window: keep focus in qf while previewing the entry under cursor with j/k
+vim.api.nvim_create_autocmd("FileType", {
+  pattern = "qf",
+  callback = function(args)
+    local opts = { buffer = args.buf, silent = true, noremap = true }
+
+    local function qf_follow(step)
+      local qf_win = vim.api.nvim_get_current_win()
+      vim.cmd("normal! " .. step)
+      vim.cmd("silent! .cc")
+      if vim.api.nvim_win_is_valid(qf_win) then
+        vim.api.nvim_set_current_win(qf_win)
+      end
+    end
+
+    vim.keymap.set("n", "j", function()
+      qf_follow("j")
+    end, opts)
+    vim.keymap.set("n", "k", function()
+      qf_follow("k")
+    end, opts)
+  end,
+})
+
 -- -- 引数なしで起動したときに Yazi を開く
 -- vim.api.nvim_create_autocmd("VimEnter", {
 --   callback = function()

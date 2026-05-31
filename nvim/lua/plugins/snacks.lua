@@ -15,6 +15,33 @@ return {
             cycle = false,
           },
         },
+        -- ここを追加
+        grep = {
+          actions = {
+            send_to_grug_far = function(picker)
+              local search = picker.input.filter.search
+              if not search or vim.trim(search) == "" then
+                vim.notify("Snacks grep: 検索語が空です", vim.log.levels.WARN)
+                return
+              end
+
+              picker:close()
+              require("grug-far").open({
+                prefills = {
+                  search = search,
+                  paths = picker:cwd(),
+                },
+              })
+            end,
+          },
+          win = {
+            input = {
+              keys = {
+                ["<C-r>"] = { "send_to_grug_far", mode = { "i", "n" }, nowait = true },
+              },
+            },
+          },
+        },
       },
     },
     terminal = {
