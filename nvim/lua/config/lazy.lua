@@ -42,6 +42,7 @@ require("lazy").setup({
     { import = "plugins.yanky" },
     { import = "plugins.nvim-surround" },
     { import = "plugins.grug-far" },
+    { import = "plugins.obsidian" },
   },
   defaults = {
     -- By default, only LazyVim plugins will be lazy-loaded. Your custom plugins will load during startup.
