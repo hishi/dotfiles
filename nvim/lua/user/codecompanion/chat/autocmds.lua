@@ -76,7 +76,6 @@ function M.setup()
   end
 
   require("user.codecompanion.highlights").setup()
-  require("user.codecompanion.pending_edits").setup()
 
   vim.api.nvim_create_autocmd("User", {
     pattern = "CodeCompanionChatCreated",

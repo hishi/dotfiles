@@ -3,7 +3,7 @@ local servers = {
   "pyright",
   "ruff",
   "terraformls",
-  "ruby_lsp",
+  -- "ruby_lsp",
   "herb_ls",
 }
 

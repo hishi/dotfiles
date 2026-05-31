@@ -13,10 +13,6 @@ function M.setup()
 
   vim.keymap.set("n", "<leader>ccs", "<cmd>CodeCompanionCopilotStats<cr>", { desc = "Copilot Stats" })
 
-  vim.api.nvim_create_user_command("CodeCompanionProposalHistory", function()
-    require("user.codecompanion.proposal_history").open()
-  end, { desc = "Show proposal history for current file" })
-
   vim.keymap.set("n", "<leader>cch", "<cmd>CodeCompanionHistory<cr>", { desc = "Chat History" })
 end
 
