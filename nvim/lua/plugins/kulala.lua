@@ -11,6 +11,14 @@ local function show_winbar_pane(direction)
     current_view = panes[1]
   end
 
+  panes = vim.tbl_filter(function(pane)
+    return pane ~= "help"
+  end, panes)
+
+  if #panes == 0 then
+    return
+  end
+
   local current_index = 1
   for index, pane in ipairs(panes) do
     if pane == current_view then
