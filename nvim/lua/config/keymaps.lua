@@ -3,6 +3,9 @@
 -- Add any additional keymaps here
 
 local open_url = require("config.url_open").open_url
+local onenote = require("config.onenote")
+
+onenote.setup()
 
 vim.keymap.set("t", "<C-[>", "<C-\\><C-n>", { noremap = true })
 vim.keymap.set({ "n", "x" }, "gx", open_url, { desc = "Open URL under cursor" })
@@ -12,6 +15,7 @@ vim.keymap.set("n", "<leader>o", "<cmd>Obsidian today<cr>", { desc = "Obsidian D
 vim.keymap.set("n", "<leader>od", "<cmd>Obsidian today<cr>", { desc = "Obsidian Daily Note (Today)" })
 vim.keymap.set("n", "<leader>oy", "<cmd>Obsidian yesterday<cr>", { desc = "Obsidian Daily Note (Yesterday)" })
 vim.keymap.set("n", "<leader>ot", "<cmd>Obsidian tomorrow<cr>", { desc = "Obsidian Daily Note (Tomorrow)" })
+vim.keymap.set("n", "<leader>on", onenote.open, { desc = "Open OneNote page" })
 
 vim.keymap.set("n", "c", '"_c', { noremap = true })
 vim.keymap.set("x", "c", '"_c', { noremap = true })
