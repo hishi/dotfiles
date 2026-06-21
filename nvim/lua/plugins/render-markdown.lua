@@ -39,6 +39,16 @@ return {
         right_pad = 0,
         icons = { "H1 ", "H2 ", "H3 ", "H4 ", "H5 ", "H6 " },
       },
+      win_options = {
+        wrap = {
+          default = vim.o.wrap,
+          rendered = false,
+        },
+        linebreak = {
+          default = vim.o.linebreak,
+          rendered = false,
+        },
+      },
     },
   },
 }
