@@ -1,5 +1,8 @@
 return {
   "stevearc/overseer.nvim",
+  init = function()
+    require("config.openapi_preview").setup()
+  end,
   keys = {
     {
       "<leader>r",
@@ -68,6 +71,28 @@ return {
       desc = "Run task and open output",
     },
     { "<leader>R", "<CMD>OverseerToggle<CR>", desc = "Toggle task list" },
+    {
+      "<leader>Op",
+      function()
+        require("config.openapi_preview").start()
+      end,
+      desc = "Preview OpenAPI",
+    },
+    {
+      "<leader>Oo",
+      function()
+        require("config.openapi_preview").open()
+      end,
+      desc = "Open OpenAPI preview",
+    },
+    {
+      "<leader>Ox",
+      function()
+        require("config.openapi_preview").stop()
+      end,
+      desc = "Stop OpenAPI preview",
+    },
+    { "<leader>Ot", "<CMD>OverseerToggle<CR>", desc = "Toggle OpenAPI tasks" },
   },
   opts = function(_, opts)
     opts = vim.tbl_deep_extend("force", opts or {}, {
