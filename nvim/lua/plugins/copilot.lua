@@ -18,8 +18,6 @@ return {
       },
       panel = { enabled = false },
       filetypes = {
-        codecompanion = false,
-        codecompanion_input = false,
         gitcommit = true,
       },
     })
