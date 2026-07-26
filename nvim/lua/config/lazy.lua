@@ -26,7 +26,6 @@ require("lazy").setup({
     { import = "plugins.copilot" },
     { import = "plugins.copilotchat" },
     { import = "plugins.render-markdown" },
-    { import = "plugins.avante" },
     { import = "plugins.oil" },
     { import = "plugins.oil-git-status" },
     { import = "plugins.yazi" },

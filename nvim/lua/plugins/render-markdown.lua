@@ -2,7 +2,7 @@ return {
   {
     "MeanderingProgrammer/render-markdown.nvim",
     cmd = { "RenderMarkdown" },
-    ft = { "markdown", "markdown.mdx", "Avante" },
+    ft = { "markdown", "markdown.mdx" },
     keys = {
       {
         "<leader>op",
@@ -21,7 +21,7 @@ return {
     },
     opts = {
       enabled = false,
-      file_types = { "markdown", "Avante" },
+      file_types = { "markdown" },
       pipe_table = {
         preset = "round",
         style = "full",
