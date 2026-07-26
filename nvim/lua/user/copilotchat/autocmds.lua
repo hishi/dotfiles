@@ -25,7 +25,6 @@ function M.setup()
 
       vim.b[args.buf].__user_copilotchat_commit_prompted = true
 
-      local bufnr = args.buf
       vim.defer_fn(function()
         local ok, chat = pcall(require, "CopilotChat")
         if not ok then
@@ -40,15 +39,15 @@ function M.setup()
             system_prompt = "あなたはエンジニアです。与えられた差分から Conventional Commits 形式（feat: ..., fix: ...等）で、日本語のコミットメッセージを1つだけ生成してください。出力はコミットメッセージ本文のみ（1行）にし、前置き・解説・コードブロックは出力しないでください。",
             callback = function(response)
               vim.schedule(function()
-                if not (bufnr and vim.api.nvim_buf_is_valid(bufnr)) then
+                if not (args.buf and vim.api.nvim_buf_is_valid(args.buf)) then
                   return
                 end
                 local msg = vim.trim(response or "")
                 -- コードブロックが含まれていた場合は除去する
-                msg = msg:gsub("^```[^\n]*\n", ""):gsub("\n```$", "")
+                msg = msg:gsub("^```+[^\n]*\n?", ""):gsub("\n?```+%s*$", "")
                 msg = vim.trim(msg)
                 if msg ~= "" then
-                  vim.api.nvim_buf_set_lines(bufnr, 0, 0, false, { msg, "" })
+                  vim.api.nvim_buf_set_lines(args.buf, 0, 0, false, { msg, "" })
                 end
                 chat.close()
               end)
