@@ -1,3 +1,5 @@
+local terminal = require("config.terminal")
+
 return {
   "folke/snacks.nvim",
   ---@type snacks.Config
@@ -50,6 +52,14 @@ return {
         width = 0.9,
         height = 0.9,
         border = "rounded",
+        keys = {
+          split = {
+            "<C-q>",
+            terminal.toggle_layout,
+            desc = "Toggle Terminal Layout",
+            mode = { "n", "t" },
+          },
+        },
       },
     },
     lazygit = {

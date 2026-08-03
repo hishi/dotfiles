@@ -24,7 +24,6 @@ require("lazy").setup({
     { import = "plugins.lsp" },
     { import = "plugins.persistence" },
     { import = "plugins.copilot" },
-    { import = "plugins.copilotchat" },
     { import = "plugins.render-markdown" },
     { import = "plugins.oil" },
     { import = "plugins.oil-git-status" },

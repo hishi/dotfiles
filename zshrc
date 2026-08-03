@@ -45,3 +45,4 @@ eval "$(zoxide init zsh)"
 if [[ -o interactive ]]; then
   stty -ixon
 fi
+export PATH="$HOME/.local/bin:$PATH"
