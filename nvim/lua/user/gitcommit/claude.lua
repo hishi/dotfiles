@@ -7,7 +7,6 @@ local claude_command = "/Users/hishi/.local/bin/claude"
 local claude_model = "claude-haiku-4-5-20251001"
 local log_file = vim.fn.stdpath("config") .. "/state/gitcommit-ai.log"
 local max_diff_chars = 1000
-local auto_cascade_delay_ms = 150
 local session_rotate_after = 20
 local session_ttl_ms = 4 * 60 * 1000
 
@@ -170,166 +169,11 @@ local function replace_message_if_unchanged(buf, expected, msg)
   end
 
   local row, current = message_line(buf)
-  if current == expected then
-    vim.api.nvim_buf_set_lines(buf, row, row + 1, false, { msg })
-  elseif not current then
+  if not current then
     vim.api.nvim_buf_set_lines(buf, 0, 0, false, { msg })
+  elseif expected and current == expected then
+    vim.api.nvim_buf_set_lines(buf, row, row + 1, false, { msg })
   end
-end
-
-local function staged_changes(name_status)
-  local changes = {}
-
-  for _, line in ipairs(vim.split(name_status or "", "\n", { plain = true, trimempty = true })) do
-    local status, rest = line:match("^(%S+)%s+(.+)$")
-    if status and rest then
-      local path = rest:match("^[^\t]+\t(.+)$") or rest
-      table.insert(changes, { status = status:sub(1, 1), path = path })
-    end
-  end
-
-  return changes
-end
-
-local function has_path(paths, pattern)
-  for _, path in ipairs(paths) do
-    if path:match(pattern) then
-      return true
-    end
-  end
-
-  return false
-end
-
-local function commit_type(paths)
-  local changes = paths.changes or {}
-  local has_source = false
-  local has_test = false
-  local has_docs = false
-  local has_added = false
-  local has_deleted = false
-
-  if has_path(paths, "gitcommit") or has_path(paths, "copilotchat") then
-    return "refactor"
-  end
-
-  if has_path(paths, "terminal") then
-    return "feat"
-  end
-
-  if has_path(paths, "lazy%-lock%.json") or has_path(paths, "plugins/") then
-    return "chore"
-  end
-
-  for _, change in ipairs(changes) do
-    has_added = has_added or change.status == "A"
-    has_deleted = has_deleted or change.status == "D"
-  end
-
-  for _, path in ipairs(paths) do
-    if path:match("%.md$") or path:match("README") or path:match("^docs/") then
-      has_docs = true
-    elseif path:match("[Tt]est") or path:match("spec") then
-      has_test = true
-    else
-      has_source = true
-    end
-  end
-
-  if has_test and not has_source then
-    return "test"
-  end
-
-  if has_docs and not has_source then
-    return "docs"
-  end
-
-  if has_added and not has_deleted then
-    return "feat"
-  end
-
-  if has_deleted then
-    return "refactor"
-  end
-
-  return "chore"
-end
-
-local function commit_scope(paths)
-  if has_path(paths, "gitcommit") or has_path(paths, "copilotchat") then
-    return "gitcommit"
-  end
-
-  if has_path(paths, "terminal") then
-    return "terminal"
-  end
-
-  if has_path(paths, "keymaps") then
-    return "keymaps"
-  end
-
-  if has_path(paths, "plugins") or has_path(paths, "lazy%-lock%.json") then
-    return "plugins"
-  end
-
-  for _, path in ipairs(paths) do
-    local scope = path:match("^nvim/lua/([^/]+)/")
-      or path:match("^lua/([^/]+)/")
-      or path:match("^nvim/([^/]+)/")
-      or path:match("^([^/]+)/")
-
-    if scope and scope ~= "" and not scope:match("^%.") then
-      return scope:gsub("%.lua$", "")
-    end
-  end
-end
-
-local function fallback_summary(paths)
-  if has_path(paths, "gitcommit") or has_path(paths, "copilotchat") then
-    return "コミットメッセージ生成を更新"
-  end
-
-  if has_path(paths, "terminal") then
-    return "ターミナル設定を更新"
-  end
-
-  if has_path(paths, "keymaps") then
-    return "キーマップを更新"
-  end
-
-  if has_path(paths, "plugins") or has_path(paths, "lazy%-lock%.json") then
-    return "プラグイン設定を更新"
-  end
-
-  if has_path(paths, "zshrc") then
-    return "シェル設定を更新"
-  end
-
-  if has_path(paths, "nvim/") or has_path(paths, "lua/") then
-    return "Neovim設定を更新"
-  end
-
-  return "変更内容を更新"
-end
-
-local function fallback_message(name_status)
-  local changes = staged_changes(name_status)
-  local paths = {}
-  paths.changes = changes
-
-  for _, change in ipairs(changes) do
-    table.insert(paths, change.path)
-  end
-
-  local kind = commit_type(paths)
-  local scope = commit_scope(paths)
-  local summary = fallback_summary(paths)
-
-  if scope then
-    return string.format("%s(%s): %s", kind, scope, summary)
-  end
-
-  return kind .. ": " .. summary
 end
 
 local function clean_message(output)
@@ -349,19 +193,6 @@ end
 local function has_japanese_summary(msg)
   local summary = msg:match(":%s*(.+)$") or msg
   return summary:match("[\128-\255]") ~= nil
-end
-
-local function insert_message(buf, msg)
-  if not vim.api.nvim_buf_is_valid(buf) then
-    return false
-  end
-
-  if buffer_has_message(buf) then
-    return false
-  end
-
-  vim.api.nvim_buf_set_lines(buf, 0, 0, false, { msg })
-  return true
 end
 
 local function truncate_text(text, max_chars)
@@ -463,7 +294,7 @@ local function ensure_cleanup_autocmd(buf)
   })
 end
 
-local function generate_with_claude(buf, diff_context, fallback, total_started_at, on_done)
+local function generate_with_claude(buf, diff_context, initial_message, total_started_at, on_done)
   if not vim.uv.fs_stat(claude_command) then
     log("claude cli missing")
     if on_done then
@@ -528,7 +359,7 @@ local function generate_with_claude(buf, diff_context, fallback, total_started_a
           return
         end
 
-        replace_message_if_unchanged(buf, fallback, msg)
+        replace_message_if_unchanged(buf, initial_message, msg)
         log("total elapsed_ms=" .. elapsed_ms(total_started_at))
       end
 
@@ -595,7 +426,7 @@ local function diff_context(max_chars, cached_name_status)
     "```",
   }, "\n")
 
-  return context, fallback_message(name_status), #(diff_result.stdout or "")
+  return context, #(diff_result.stdout or "")
 end
 
 local function run_generation(buf, opts)
@@ -608,7 +439,7 @@ local function run_generation(buf, opts)
 
   vim.b[buf].__user_claude_commit_running = true
   local total_started_at = now_ms()
-  local context, fallback, diff_bytes = diff_context(max_diff_chars, opts.cached_name_status)
+  local context, diff_bytes = diff_context(max_diff_chars, opts.cached_name_status)
 
   if not context then
     vim.b[buf].__user_claude_commit_running = false
@@ -619,7 +450,7 @@ local function run_generation(buf, opts)
 
   ensure_cleanup_autocmd(buf)
   local _, current = message_line(buf)
-  generate_with_claude(buf, context, current or fallback, total_started_at, function()
+  generate_with_claude(buf, context, current, total_started_at, function()
     if vim.api.nvim_buf_is_valid(buf) then
       vim.b[buf].__user_claude_commit_running = false
     end
@@ -653,19 +484,9 @@ function M.setup()
       end
 
       vim.b[args.buf].__user_claude_commit_prompted = true
-      local fallback = fallback_message(name_status_result.stdout)
-      local inserted_fallback = insert_message(args.buf, fallback)
-      log("fallback inserted=" .. tostring(inserted_fallback) .. " message=" .. fallback)
-      log("total elapsed_ms=" .. elapsed_ms(total_started_at))
+      log("generation scheduled elapsed_ms=" .. elapsed_ms(total_started_at))
 
-      if inserted_fallback then
-        local name_status_snapshot = name_status_result.stdout
-        vim.defer_fn(function()
-          if vim.api.nvim_buf_is_valid(args.buf) then
-            run_generation(args.buf, { cached_name_status = name_status_snapshot })
-          end
-        end, auto_cascade_delay_ms)
-      end
+      run_generation(args.buf, { cached_name_status = name_status_result.stdout })
     end,
   })
 end
