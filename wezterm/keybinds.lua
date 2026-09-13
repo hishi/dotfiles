@@ -1,5 +1,6 @@
 local wezterm = require("wezterm")
 local act = wezterm.action
+local session = require("session")
 
 -- Show which key table is active in the status area
 wezterm.on("update-right-status", function(window, pane)
@@ -59,7 +60,10 @@ return {
 
 		{ mods = "SUPER", key = "n", action = act.SpawnCommandInNewTab { cwd = wezterm.home_dir .. "/Dev" },},
 
-		{ mods = "SUPER", key = "q", action = act.QuitApplication },
+		{ mods = "SUPER", key = "q", action = wezterm.action_callback(function(window, pane)
+			session.save_state()
+			window:perform_action(act.QuitApplication, pane)
+		end) },
 
 		{ mods = "SUPER", key = "j", action = act.ShowLauncherArgs { flags = 'TABS' } },
 		-- タブ切替 Cmd + 数字

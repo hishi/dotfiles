@@ -1,8 +1,12 @@
 local wezterm = require("wezterm")
 local config = wezterm.config_builder()
-local mux = wezterm.mux
+require("session")
 
 config.automatically_reload_config = true
+config.font = wezterm.font_with_fallback({
+	"JetBrains Mono",
+	"Hiragino Sans",
+})
 config.font_size = 12.0
 config.use_ime = true
 config.window_background_opacity = 0.85
@@ -78,26 +82,6 @@ wezterm.on("format-tab-title", function(tab, tabs, panes, config, hover, max_wid
 		{ Text = SOLID_RIGHT_ARROW },
 	}
 end)
-
-wezterm.on("gui-startup", function(cmd)
-  local tab, pane, window = mux.spawn_window {
-    workspace = 'default',
-    cwd = wezterm.home_dir .. '/Dev/dotfiles/wezterm',
-  }
-
-  local tab_dirs = {
-    '/Dev/dotfiles/nvim',
-    '/Dev/python',
-    '/Dev/nextjs',
-  }
-
-  for _, dir in ipairs(tab_dirs) do
-    window:spawn_tab { cwd = wezterm.home_dir .. dir }
-  end
-
-  tab:activate()
-end)
-
 
 ----------------------------------------------------
 -- keybinds

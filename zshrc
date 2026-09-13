@@ -46,3 +46,4 @@ if [[ -o interactive ]]; then
   stty -ixon
 fi
 export PATH="$HOME/.local/bin:$PATH"
+export PATH="/opt/homebrew/opt/mysql-client/bin:$PATH"

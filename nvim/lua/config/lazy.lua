@@ -19,6 +19,7 @@ require("lazy").setup({
     -- add LazyVim and import its plugins
     { "LazyVim/LazyVim", import = "lazyvim.plugins" },
     { import = "lazyvim.plugins.extras.lang.yaml" },
+    { import = "lazyvim.plugins.extras.lang.sql" },
     -- import/override with your plugins
     { import = "plugins.snacks" },
     { import = "plugins.lsp" },
@@ -42,6 +43,7 @@ require("lazy").setup({
     { import = "plugins.nvim-surround" },
     { import = "plugins.grug-far" },
     { import = "plugins.obsidian" },
+    { import = "plugins.vim-dadbod" },
   },
   defaults = {
     -- By default, only LazyVim plugins will be lazy-loaded. Your custom plugins will load during startup.
